@@ -44,7 +44,11 @@ def get_instancia_csv(num_lojas: int, num_instancia: int) -> pd.DataFrame:
 
     df_instancia = pd.read_csv(caminho_completo)
 
-    return df_instancia
+    list_coordinates = list(df_instancia[['x_coordinate', 'y_coordinate']].itertuples(index=False, name=None))
+    list_visit_duration = df_instancia['visit_duration_minutes'].tolist()
+    list_frequency = df_instancia['initial_frequency'].tolist()
+
+    return list_coordinates, list_visit_duration, list_frequency
 
 class RKO_Base(ABC):
     """
@@ -92,3 +96,8 @@ class RKO_Base(ABC):
             'alphaLNS': [0.95] # Fator de resfriamento para o LNS.
         }
 
+if __name__ == "__main__":
+    list_coords, list_visits, list_frequency = get_instancia_csv(10,1)
+    print(list_coords)
+
+    
