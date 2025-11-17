@@ -251,11 +251,12 @@ class RKO_Base():
     Classe base abstrata para o problema RKO
     """
 
-    def __init__(self, tempo):
+    def __init__(self, tempo, velocidade):
 
         """
         Definição de atributos para o problema.
         """
+        self.velocidade = velocidade
         self.max_time = tempo  # Tempo máximo de execução para cada metaheurística (em segundos)
         self.instance_name = "Suzano_RKO_Problem"
         list_coords, list_visits, list_frequency = get_instancia_csv(50,1)
@@ -329,7 +330,7 @@ class RKO_Base():
         # print("Order:", order)
         # print("Promotores keys:", promotores_keys)
 
-        promotores_bin = [Promotores(veloc_50_lojas)]
+        promotores_bin = [Promotores(self.velocidade)]
 
         for idx, loja in enumerate(order):
             loja = int(loja)
@@ -354,7 +355,7 @@ class RKO_Base():
                 promotor.adicionar_loja(dia_promotor_bin, coords, carga, visit_keys[idx])
 
             else:
-                new_promotor = Promotores(veloc_50_lojas)
+                new_promotor = Promotores(self.velocidade)
                 dia = int(key * 6)  
                 new_promotor.adicionar_loja(dia, coords, carga, visit_keys[idx])
                 promotores_bin.append(new_promotor)
@@ -388,7 +389,7 @@ if __name__ == "__main__":
     print(list_frequency)
 
 
-    env = RKO_Base(60)
+    env = RKO_Base(60, veloc_50_lojas)
     solver = RKO(env, print_best=True)
     final_cost, final_solution, time_to_best = solver.solve(60, brkga=1, ils=1, lns=1)
 
