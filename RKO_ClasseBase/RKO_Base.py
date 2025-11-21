@@ -225,8 +225,8 @@ class Promotores:
     
     def dias_possiveis(self, carga_visita):
             """
-            1. Tenta encontrar dias onde a loja cabe SEM hora extra (Hard Constraint).
-            2. Se não houver nenhum, retorna o dia que gera a MENOR hora extra (Soft Constraint).
+            1. Tenta encontrar dias onde a loja cabe SEM hora extra.
+            2. Se não houver nenhum, retorna o dia que gera a MENOR hora extra.
             """
             
             index_possiveis = []
@@ -378,12 +378,6 @@ class Promotores:
 
         return distancia
 
-
-veloc_100_lojas = 18 #s/unidade
-veloc_50_lojas = 15 #s/unidade
-veloc_20_lojas = 12 #s/unidade
-veloc_10_lojas = 10 #s/unidade
-
 def get_instancia_csv(num_lojas: int, num_instancia: int) -> pd.DataFrame:
     """
     Retorna o dataframe com os dados da instância especificada.
@@ -403,7 +397,7 @@ def get_instancia_csv(num_lojas: int, num_instancia: int) -> pd.DataFrame:
     dir_root = os.path.dirname(dir_atual)
     base_path = os.path.join(dir_root, "Instancias_Unifesp_Suzano")
 
-    if num_lojas <= 0 or num_lojas > 50 or num_instancia <= 0 or num_instancia > 50:
+    if num_lojas <= 0 or num_lojas > 100 or num_instancia <= 0 or num_instancia > 100:
         raise ValueError("Número de lojas ou número da instância não compatível.")
 
     pasta_tamanho = f"{num_lojas}_stores"
@@ -427,7 +421,7 @@ class RKO_Base():
     Classe base abstrata para o problema RKO
     """
 
-    def __init__(self, tempo, velocidade):
+    def __init__(self, tempo, velocidade, lojas, inst):
         """
         Definição de atributos para o problema.
         """
@@ -440,7 +434,7 @@ class RKO_Base():
         self.velocidade = velocidade    # Velocidade de deslocamento
         self.max_time = tempo           # Tempo máximo de execução para cada metaheurística (em segundos)
         self.instance_name = "Suzano_RKO_Problem"
-        list_coords, list_visits, list_frequency = get_instancia_csv(50,1) #Carregamento de dados da instância especificada
+        list_coords, list_visits, list_frequency = get_instancia_csv(lojas, inst) #Carregamento de dados da instância especificada
 
         self.dict_best: dict = {}
 
@@ -555,17 +549,34 @@ class RKO_Base():
         # 1. Separação da solução
         tam = len(solution)
         tam_parts = tam // 3
-        order = solution[0:tam_parts]
+
+        #order: Define qual visita processamos primeiro. Se a loja difícil for processada primeiro, ela pega os melhores horários.
+        #Se for por último, ela pega o que sobrou.
+        order = solution[0:tam_parts] 
+
+        #promotores_keys: Define quem vai atender. É usada para escolher entre os promotores existentes ou criar um novo.
         promotores_keys = solution[tam_parts:2 * tam_parts]
-        visit_keys = solution[2 * tam_parts:tam]
+
+        #visit_keys: É usada para escolher o dia da semana (caso seja um promotor novo) ou a posição na rota (manhã/tarde).
+        visit_keys = solution[2 * tam_parts:tam] 
         #=======================================================
 
         # 2. Inicialização
         promotores_bin = [Promotores(self.velocidade)]
+
+        donos_das_lojas = {}
         #=======================================================
 
         # 3. Processamento para cada visita
+
+        """
+        Aqui o algoritmo pega as visitas uma por uma.
+        Se a Loja 50 tem o menor valor em order_keys, ela é a primeira a entrar no loop.
+        O algoritmo tenta encaixar a Loja 50 no cenário vazio. Depois tenta encaixar a próxima, e assim por diante.
+        """
+
         for idx, loja in enumerate(order):
+            #Recupera as informações das lojas da iteração
             loja = int(loja)
             carga = self.total_visit_duration[loja]
             coords = self.total_coords[loja]
@@ -576,39 +587,111 @@ class RKO_Base():
 
             # 4. Coleta de opções
             promotores_possiveis = []
-
-            """
-            O loop abaixo verifica para cada promotor existente se há espaço.
-            Por conta de ser uma restrição não rígida, a resposta é sempre "Sim" (mesmo que gere Hora Extra).
-            """
-
-            for i in range(len(promotores_bin)):
-                #Sempre haverá dias disponíveis, contudo ou será com hr extra ou será tempo livre de um novo promotor
-                dias_validos = promotores_bin[i].dias_possiveis(carga)
-                for dia in dias_validos:
-                    promotores_possiveis.append((i, dia))
             
-            promotores_possiveis.append((-1, -1)) 
+            #Loja já possui promotor
+            if coords in donos_das_lojas:
+                #Recupera qual o promotor
+                idx_dono = donos_das_lojas[coords]
+                promotor_dono = promotores_bin[idx_dono]
 
-            # 5. Escolha e alocação baseada na Chave Aleatória
+                #Verifica quais seus dias disponíveis
+                dias_validos = promotor_dono.dias_possiveis(carga)
+                for dia in dias_validos:
+                    promotores_possiveis.append((idx_dono, dia))
+
+            #Loja ainda não possui promotor
+            else:
+                """
+                O loop abaixo verifica para cada promotor existente se há espaço.
+                Por conta de ser uma restrição não rígida, a resposta é sempre "Sim" (mesmo que gere Hora Extra).
+                """
+
+                #Opção A: Tenta alocar loja num promotor já existente
+                for i in range(len(promotores_bin)):
+                    #Sempre haverá dias disponíveis, contudo ou será com hr extra ou será tempo livre de um novo promotor
+                    if promotores_bin[i].total_lojas_unicas() < 8:
+                        dias_validos = promotores_bin[i].dias_possiveis(carga)
+                        for dia in dias_validos:
+                            promotores_possiveis.append((i, dia))
+
+                #Opção B: Contratar novo promotor
+                promotores_possiveis.append((-1, -1)) 
+
+                """
+                Ex.:
+
+                O código pergunta: "Quais são as jogadas possíveis agora?"
+
+                Imagine que já existem 2 promotores (P0 e P1):
+
+                -P0 diz: "Posso atender na Segunda ou na Terça". => Adiciona (0, 0) e (0, 1) na lista.
+                -P1 diz: "Estou lotado, mas posso na Sexta com hora extra". => Adiciona (1, 4) na lista.
+                -RH diz: "Sempre podemos contratar alguém novo". => Adiciona (-1, -1).
+                
+                A lista promotores_possiveis vira um Menu de Decisão: Index 0: (P0, 0) | Index 1: (P0, 1) | Index 2: (P1, 4) | Index 3: (-1, -1)
+                """
+            #=======================================================
+
+            # 5. Escolha e alocação baseada na Chave Aleatória (O Sorteio)
             idx_escolhido = int(key * len(promotores_possiveis))
+
+            """
+            Aqui usa-se a chave aleatória (key) (um número entre 0.00 e 0.99) para escolher um item do menu.
+            
+            Matemáticamente: Se a lista tem 4 opções e o key é 0.80: 
+                0.80 . 4 = 3.2
+                int(3.2) = 3
+                
+            O algoritmo escolhe o item de índice 3 (Criar Novo Promotor).
+            O Aprendizado: Se escolher o índice 3 for uma decisão ruim (custar muito caro), 
+            o RKO vai evoluir para ter um key menor (ex: 0.20) nas próximas gerações, forçando a escolha do índice 0 ou 1 (Promotores existentes).
+            """
+            #=======================================================
+
+            # 6. A Execução
+
+            """
+            Proteção contra erros de arredondamento:
+
+            -Se a lista tem tamanho 5 e a chave for muito próxima de 1.0, a conta int(1.0 * 5) dá 5.
+
+            -Mas os índices de uma lista de tamanho 5 são 0, 1, 2, 3, 4. O índice 5 daria erro (IndexError).
+
+            -Essa linha garante que, se a matemática "passar do ponto", nós pegamos o último item da lista.
+            """
             
             if idx_escolhido >= len(promotores_possiveis):
                 idx_escolhido = len(promotores_possiveis) - 1
 
+            """
+            Aqui pegamos a opção que ganhou o sorteio: 
+            -Se a tupla for (-1, -1), as variáveis recebem -1 (Sinal de Novo Promotor).
+            -Se a tupla for (0, 2), significa "Promotor 0, Dia 2 (Quarta)".
+            """
             index_promotor_bin, dia_promotor_bin = promotores_possiveis[idx_escolhido]
 
+            #Se o índice for de um novo promotor, adiciona-se um novo na lista de promotores
             if index_promotor_bin == -1:
                 new_promotor = Promotores(self.velocidade)
                 
+                #Decisão do dia inicial
                 dia_novo = int(visit_keys[idx] * 6)
                 if dia_novo >= 6: dia_novo = 5
                 
+                #Decide onde vai adicionar a loja na rota do promotor
                 new_promotor.adicionar_loja(dia_novo, coords, carga, visit_keys[idx])
                 promotores_bin.append(new_promotor)
+
+                #Registrando qual loja pertence a qual promotor
+                donos_das_lojas[coords] = len(promotores_bin) - 1
+
+            #Se o promotor já existe, adiciona-se a loja na sua rota com base na visit_keys    
             else:
                 promotor = promotores_bin[index_promotor_bin]
                 promotor.adicionar_loja(dia_promotor_bin, coords, carga, visit_keys[idx])
+
+                #Registrando qual loja pertence a qual promotor
+                donos_das_lojas[coords] = index_promotor_bin
                 
         #=======================================================
 
@@ -658,37 +741,37 @@ class RKO_Base():
         """
         #=======================================================
         
-        # --- Definição de Valores (Ordem Corrigida) ---
-        Custo_km = 0.06
-        Valor_he = 0.3408  # (20.45 / 60)
-        Salario = 750.0
+        # --- Definição de Pesos (Custos) ---
+        P_promotor = 750.0
+        P_hr_extra = 0.3408 # (20.45 / 60)
+        P_dist = 0.06 # R$/m
+        P_hr_extra_abusiva = 10_000 # Custo Brutal
 
-        # --- Definição de Pesos (Fitness) ---
-        P_promotor = 1_000_000
-        P_hr_extra = 100
-        P_dist = 100
-        P_hr_extra_abusiva = 10_000_000 # Penalidade Brutal
+        """
+        P_promotor = 750.0
+        P_hr_extra = 0.3408 # (20.45 / 60)
+        P_dist = 0.06 # R$/m
+        P_hr_extra_abusiva = 10_000 # Custo Brutal
+        """
 
-        # O Limite é calculado APÓS definir Salario e Valor_he
-        LIMITE_HE_SEMANAL = Salario / Valor_he 
+        LIMITE_HE_SEMANAL = P_promotor / P_hr_extra 
 
         # --- Primeira Parcela: Contratação ---
-        Custo_1 = P_promotor * len(promotores_bin) * Salario
+        Custo_1 = P_promotor * len(promotores_bin)
 
         # --- Segunda Parcela: Distância ---
         Custo_dist_total = 0
         for promotor in promotores_bin:
             dist = promotor.dist_total()
-            Custo_dist_total += dist * Custo_km # Assumindo Fator=1.0 implícito
+            Custo_dist_total += dist
         
         Custo_2 = Custo_dist_total * P_dist
 
-        # --- Terceira Parcela: Hora Extra (Com Lógica de Break-even) ---
-        Custo_3 = 0 # Fitness (Pontos)
-        custo_he_financeiro_total = 0 # Dinheiro Real (R$)
+        # --- Terceira Parcela: Hora Extra ---
+        Custo_3 = 0 
+        total_minutos_he_frota = 0 # Dinheiro Real (R$)
 
         for promotor in promotores_bin:
-            # Reinicia contagem para CADA promotor
             he_minutos_semanal_promotor = 0 
             
             for dia in range(6):
@@ -698,19 +781,19 @@ class RKO_Base():
                 if tempo_total > limite:
                     he_minutos_semanal_promotor += (tempo_total - limite)
             
-            # Acumula o custo financeiro real
-            custo_he_financeiro_total += he_minutos_semanal_promotor * Valor_he
+            # Acumula as horas extras
+            total_minutos_he_frota += he_minutos_semanal_promotor
 
             # Aplica a Lógica de Penalidade (Ponto de Ruptura)
             if he_minutos_semanal_promotor <= LIMITE_HE_SEMANAL:
                 # Zona Segura: Penalidade Padrão
-                Custo_3 += (he_minutos_semanal_promotor * Valor_he) * P_hr_extra
+                Custo_3 += (he_minutos_semanal_promotor) * P_hr_extra
             else:
                 # Zona Abusiva: Penalidade Severa (Simula custo de contratação)
                 excesso = he_minutos_semanal_promotor - LIMITE_HE_SEMANAL
                 
-                penalidade_normal = (LIMITE_HE_SEMANAL * Valor_he) * P_hr_extra
-                penalidade_abusiva = (excesso * Valor_he) * P_hr_extra_abusiva
+                penalidade_normal = (LIMITE_HE_SEMANAL) * P_hr_extra
+                penalidade_abusiva = (excesso) * P_hr_extra_abusiva
                 
                 Custo_3 += penalidade_normal + penalidade_abusiva
 
@@ -728,15 +811,8 @@ class RKO_Base():
             self.melhor_fitness_encontrado = fitness_total
             
             qtd_promotores = len(promotores_bin)
-            
-            # Custo Real para o chefe ver
-            custo_financeiro_estimado = (
-                (qtd_promotores * Salario) + 
-                Custo_dist_total + # Já está multiplicado por Custo_km lá em cima
-                custo_he_financeiro_total
-            )
 
-            print(f" >>> [NOVO RECORD] Promotores: {qtd_promotores} | HE Total: {custo_he_financeiro_total/Valor_he:.0f} min | Custo Real: R$ {custo_financeiro_estimado:.2f} | (Fitness: {fitness_total:.0f})")
+            print(f" >>> [NOVO RECORD] Promotores: {qtd_promotores} | HE Total: {total_minutos_he_frota:.0f} min | (Fitness/Custo: R$ {fitness_total:.2f})")
 
         return fitness_total
         
@@ -753,47 +829,121 @@ class RKO_Base():
         return len(promotores_bin) + (menor_carga / 1000000.0)
         """
 
+veloc_100_lojas = 18 #s/unidade
+veloc_50_lojas = 15 #s/unidade
+veloc_20_lojas = 12 #s/unidade
+veloc_10_lojas = 10 #s/unidade
 
 if __name__ == "__main__":
-    list_coords, list_visits, list_frequency = get_instancia_csv(20, 1)
+
+    #=========================
+    n_lojas = 100
+    inst = 1
+    #=========================
+
+    mapa_velocidades = {
+        10: veloc_10_lojas,
+        20: veloc_20_lojas,
+        50: veloc_50_lojas,
+        100: veloc_100_lojas
+    }
+
+    velocidade_atual = mapa_velocidades.get(n_lojas)
+
+    list_coords, list_visits, list_frequency = get_instancia_csv(n_lojas, inst)
     
-    # Configuração do Ambiente e Solver
-    env = RKO_Base(60, veloc_50_lojas)
+    env = RKO_Base(60, velocidade_atual, n_lojas, inst) #Alterar Velocidade da instância
+
     solver = RKO(env, print_best=True)
-    
-    # Execução
     final_cost, final_solution, time_to_best = solver.solve(60, brkga=1, ils=1, lns=1)
     
-    # Decodificação da Melhor Solução
     solucao_final = env.cost(env.decoder(final_solution), view_solution=True)  
 
-    # --- ESTATÍSTICAS DA SOLUÇÃO ---
+    # --- RELATÓRIO DETALHADO E VERIFICAÇÃO ---
     print("\n" + "="*40)
     print("       ESTATÍSTICAS FINAIS DA FROTA       ")
     print("="*40)
+
+    # Dicionário para rastrear conflitos: Coord -> Lista de Promotores
+    mapa_visitas_global = {}
     
     total_lojas_atendidas = 0
     total_visitas_realizadas = 0
-    qtd_promotores = len(solucao_final)
-    
-    for i, promotor in enumerate(solucao_final):
-        qtd_lojas = promotor.total_lojas_unicas()
-        qtd_visitas = promotor.total_visitas()
-        carga = promotor.carga_total()
-        
-        total_lojas_atendidas += qtd_lojas
-        total_visitas_realizadas += qtd_visitas
-        
-        print(f"Promotor {i}: {qtd_lojas} lojas únicas | {qtd_visitas} visitas | Carga: {carga/60:.1f}h")
 
-    if qtd_promotores > 0:
-        media_lojas = total_lojas_atendidas / qtd_promotores
-        media_visitas = total_visitas_realizadas / qtd_promotores
+    for i, promotor in enumerate(solucao_final):
+        # 1. Coleta todas as coordenadas visitadas
+        todas_coords = (
+            promotor.coords_segunda + promotor.coords_terca + 
+            promotor.coords_quarta + promotor.coords_quinta + 
+            promotor.coords_sexta + promotor.coords_sabado
+        )
         
-        print("-" * 40)
-        print(f"Média de Lojas Únicas por Promotor: {media_lojas:.2f}")
-        print(f"Média de Visitas por Promotor:      {media_visitas:.2f}")
-        print("="*40 + "\n")
+        # 2. Identifica lojas únicas (Set remove duplicatas do mesmo promotor)
+        coords_unicas = set(todas_coords)
+        
+        # 3. Converte Coordenadas -> IDs de Loja para exibição legível
+        ids_lojas = []
+        for coord in coords_unicas:
+            # Lógica de Conflito: Registra quem visitou essa coord
+            if coord not in mapa_visitas_global:
+                mapa_visitas_global[coord] = []
+            mapa_visitas_global[coord].append(i)
+
+            # Lógica de Exibição: Encontra o ID (index) na lista original
+            try:
+                id_real = list_coords.index(coord)
+                ids_lojas.append(id_real)
+            except ValueError:
+                ids_lojas.append("?") # Caso não ache (improvável)
+
+        # Ordena para ficar bonito: [0, 1, 5, 9]
+        ids_lojas.sort()
+        
+        # Estatísticas individuais
+        carga_h = promotor.carga_total() / 60.0
+        num_visitas = len(todas_coords)
+        
+        # Acumuladores globais
+        total_lojas_atendidas += len(coords_unicas)
+        total_visitas_realizadas += num_visitas
+
+        # --- IMPRESSÃO DO PROMOTOR ---
+        print(f"PROMOTOR {i}")
+        print(f"  > Carga Horária: {carga_h:.1f}h")
+        print(f"  > Total Visitas: {num_visitas}")
+        print(f"  > Carteira ({len(ids_lojas)} lojas): {ids_lojas}")
+        print("-" * 60)
+
+    # --- ESTATÍSTICAS GERAIS ---
+    if len(solucao_final) > 0:
+        media_lojas = total_lojas_atendidas / len(solucao_final)
+        print(f"\nMÉDIAS DA EQUIPE:")
+        print(f"  Lojas/Promotor: {media_lojas:.2f}")
+    
+    # --- RELATÓRIO DE CONFLITOS ---
+    print("\n" + "="*60)
+    print("          VERIFICAÇÃO DE EXCLUSIVIDADE          ")
+    print("="*60)
+    
+    tem_conflito = False
+    for coord, lista_promotores in mapa_visitas_global.items():
+        if len(lista_promotores) > 1:
+            tem_conflito = True
+            # Recupera o ID para mostrar no erro
+            try:
+                id_loja = list_coords.index(coord)
+                nome_loja = f"Loja ID {id_loja}"
+            except:
+                nome_loja = f"Coord {coord}"
+            
+            print(f" [ERRO] {nome_loja} disputada por promotores: {lista_promotores}")
+
+    if not tem_conflito:
+        print(" [SUCESSO] Distribuição Perfeita: Cada loja tem apenas 1 dono.\n")
+    else:
+        print(" [FALHA] Existem lojas com múltiplos donos.\n")
+
+    #========================================
 
     # Loop de Plotagem
     while True:

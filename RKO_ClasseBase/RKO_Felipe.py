@@ -303,7 +303,7 @@ class RKO_Base():
         self.LNS_parameters: dict = {
             'betaMin': [0.10], # Fração mínima de solução a serem removidas a cada iteração.
             'betaMax': [0.30], # Fração máxima de solução a serem removidas a cada iteração.
-            'TO': [1000],      # Número de iterações sem melhora para o critério de parada.
+            'TO':      [1000], # Número de iterações sem melhora para o critério de parada.
             'alphaLNS': [0.95] # Fator de resfriamento para o LNS.
         }
 
