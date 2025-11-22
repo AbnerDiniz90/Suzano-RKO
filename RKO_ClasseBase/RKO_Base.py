@@ -797,6 +797,31 @@ class RKO_Base():
                 
                 Custo_3 += penalidade_normal + penalidade_abusiva
 
+        # --- Quarta Parcela : Distribuição de Carga ----
+
+        TOLERANCIA_DIFERENCA = 10 * 60
+        P_BALANCEAMENTO = 100_000
+
+        cargas_horarias = []
+
+        for p in promotores_bin:
+            cargas_horarias.append(p.carga_total())
+            
+            if len(cargas_horarias) > 1:
+                maior_carga = max(cargas_horarias)
+                menor_carga = min(cargas_horarias)
+                diferenca = maior_carga - menor_carga
+                
+                # Lógica da Tolerância
+                if diferenca > TOLERANCIA_DIFERENCA:
+                    # Só penaliza o EXCEDENTE da diferença
+                    # Ex: Se a diferença for 15h e a tolerância 12h, penaliza apenas 3h.
+                    excesso_desbalanceamento = diferenca - TOLERANCIA_DIFERENCA
+                    Custo_4 = excesso_desbalanceamento * P_BALANCEAMENTO
+                else:
+                    # Se a diferença for menor que 12h, o custo é zero (Zona Aceitável)
+                    Custo_4 = 0
+
         # =======================================================
         
         # Retorno Visualização (Objeto)
@@ -804,7 +829,7 @@ class RKO_Base():
             return promotores_bin
         
         # Cálculo Final
-        fitness_total = Custo_1 + Custo_2 + Custo_3
+        fitness_total = Custo_1 + Custo_2 + Custo_3 + Custo_4
 
         # Log em Tempo Real (Console)
         if fitness_total < self.melhor_fitness_encontrado:
@@ -908,10 +933,22 @@ if __name__ == "__main__":
         total_visitas_realizadas += num_visitas
 
         # --- IMPRESSÃO DO PROMOTOR ---
+
+        cargas_dias = {"Segunda" : promotor.carga_segunda, 
+                       "Terça" : promotor.carga_terca, 
+                       "Quarta" : promotor.carga_quarta, 
+                       "Quinta" : promotor.carga_quinta, 
+                       "Sexta" : promotor.carga_sexta, 
+                       "Sabado" : promotor.carga_sabado}
+
         print(f"PROMOTOR {i}")
         print(f"  > Carga Horária: {carga_h:.1f}h")
         print(f"  > Total Visitas: {num_visitas}")
-        print(f"  > Carteira ({len(ids_lojas)} lojas): {ids_lojas}")
+        print(f"  > Carteira ({len(ids_lojas)} lojas): {ids_lojas}\n")
+
+        for dia, minutos in cargas_dias.items():
+            print(f"  > Carga {dia}: {minutos/60:.1f}h")
+
         print("-" * 60)
 
     # --- ESTATÍSTICAS GERAIS ---
