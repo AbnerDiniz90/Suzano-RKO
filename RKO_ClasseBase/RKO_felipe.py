@@ -259,7 +259,7 @@ class RKO_Base():
         self.velocidade = velocidade
         self.max_time = tempo  # Tempo máximo de execução para cada metaheurística (em segundos)
         self.instance_name = "Suzano_RKO_Problem"
-        list_coords, list_visits, list_frequency = get_instancia_csv(50,1)
+        list_coords, list_visits, list_frequency = get_instancia_csv(10,1)
 
         self.dict_best: dict = {}
 
@@ -331,34 +331,41 @@ class RKO_Base():
         # print("Promotores keys:", promotores_keys)
 
         promotores_bin = [Promotores(self.velocidade)]
+        loja_f = 0
+        idx_f = 0
+        for loja in range(len(self.visit_coords)):
+            for idx in range(self.frequencias[loja]):
+                loja_f = int(loja_f)
+                carga = self.total_visit_duration[loja_f]
+                coords = self.total_coords[loja_f]
+                key = promotores_keys[idx_f]
+                # print( key , idx, loja)
 
-        for idx, loja in enumerate(order):
-            loja = int(loja)
-            carga = self.total_visit_duration[loja]
-            coords = self.total_coords[loja]
-            key = promotores_keys[idx]
-            # print( key , idx, loja)
+                promotores_possiveis = []
+                for i in range(len(promotores_bin)):
+                    dias_possiveis = promotores_bin[i].dias_possiveis(carga)
+                    if len(dias_possiveis) >= self.frequencias[loja]:
+                        for dia in dias_possiveis:
+                            promotores_possiveis.append( (i, dia) )
+                        break
 
-            promotores_possiveis = []
-            for i in range(len(promotores_bin)):
-                dias_possiveis = promotores_bin[i].dias_possiveis(carga)
-                for dia in dias_possiveis:
-                    promotores_possiveis.append( (i, dia) )
+                if len(promotores_possiveis) > 0:
+                    idx_promotor = int(key * len(promotores_possiveis))
+                    # print(key, idx_promotor, len(promotores_possiveis))
 
-            if len(promotores_possiveis) > 0:
-                idx_promotor = int(key * len(promotores_possiveis))
-                # print(key, idx_promotor, len(promotores_possiveis))
+                    index_promotor_bin , dia_promotor_bin = promotores_possiveis[idx_promotor]
 
-                index_promotor_bin , dia_promotor_bin = promotores_possiveis[idx_promotor]
+                    promotor = promotores_bin[index_promotor_bin]
+                    promotor.adicionar_loja(dia_promotor_bin, coords, carga, visit_keys[idx_f])
 
-                promotor = promotores_bin[index_promotor_bin]
-                promotor.adicionar_loja(dia_promotor_bin, coords, carga, visit_keys[idx])
-
-            else:
-                new_promotor = Promotores(self.velocidade)
-                dia = int(key * 6)  
-                new_promotor.adicionar_loja(dia, coords, carga, visit_keys[idx])
-                promotores_bin.append(new_promotor)
+                else:
+                    new_promotor = Promotores(self.velocidade)
+                    dia = int(key * 6)  
+                    new_promotor.adicionar_loja(dia, coords, carga, visit_keys[idx_f])
+                    promotores_bin.append(new_promotor)
+                
+                loja_f += 1
+                idx_f += 1
 
 
         menor_carga = 1000000000000
@@ -375,12 +382,7 @@ class RKO_Base():
             
                 
 
-            
-
-
-
-            
-        
+         
 
 if __name__ == "__main__":
     list_coords, list_visits, list_frequency = get_instancia_csv(10,1)
@@ -389,7 +391,7 @@ if __name__ == "__main__":
     print(list_frequency)
 
 
-    env = RKO_Base(60, veloc_50_lojas)
+    env = RKO_Base(60, veloc_10_lojas)
     solver = RKO(env, print_best=True)
     final_cost, final_solution, time_to_best = solver.solve(60, brkga=1, ils=1, lns=1)
 
@@ -405,3 +407,24 @@ if __name__ == "__main__":
         dia = int(input("Digite o dia da semana (0=Segunda, 1=Terça, 2=Quarta, 3=Quinta, 4=Sexta, 5=Sábado): "))
         if 0 <= promotor < len(solucao_final):
             solucao_final[promotor].plot_rota(dia)
+
+    for i, prom in enumerate(solucao_final):
+        print(f"\n===== PROMOTOR {i} =====")
+        print(f"Carga Total: {prom.carga_total():.2f} minutos")
+
+        dias = [
+            ("Segunda", prom.coords_segunda, prom.cargas_segunda),
+            ("Terça", prom.coords_terca, prom.cargas_terca),
+            ("Quarta", prom.coords_quarta, prom.cargas_quarta),
+            ("Quinta", prom.coords_quinta, prom.cargas_quinta),
+            ("Sexta", prom.coords_sexta, prom.cargas_sexta),
+            ("Sábado", prom.coords_sabado, prom.cargas_sabado),
+        ]
+
+        for nome_dia, coords, cargas in dias:
+            if len(coords) > 0:
+                print(f"\n  {nome_dia}:")
+                for idx, (c, load) in enumerate(zip(coords, cargas), start=1):
+                    print(f"    Loja {idx}: Coordenadas={c}, Carga={load}")
+            else:
+                print(f"\n  {nome_dia}: (nenhuma loja atribuída)")
