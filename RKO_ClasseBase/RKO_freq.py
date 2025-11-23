@@ -10,6 +10,7 @@ from RKO import RKO
 import matplotlib.pyplot as plt
 import numpy as np
 import matplotlib.pyplot as plt
+from collections import Counter
 
 class Promotores:
     def __init__(self, velocidade):
@@ -387,7 +388,9 @@ def get_instancia_csv(num_lojas: int, num_instancia: int) -> pd.DataFrame:
         num_instancia (int): O número da instância desejada (ex: 1, 2, 10, 11).
 
     Returns:
-        pd.Dataframe : Dataframe com os dados da instância.
+        list_coordinates : Lista com as coordenadas das lojas
+        list_visit_duration : Lista com a duração das visitas
+        matrix_profitability : Matriz Loja x Rentabilidade com base no aumento da frequência
 
     Raises:
         ValueError: Se os números fornecidos não forem válidos.
@@ -415,6 +418,7 @@ def get_instancia_csv(num_lojas: int, num_instancia: int) -> pd.DataFrame:
     list_frequency = df_instancia['initial_frequency'].tolist()
 
     cols_lucro = [f'profitability_freq_{i}' for i in range(1, 7)]
+
     matrix_profitability = df_instancia[cols_lucro].values
 
     return list_coordinates, list_visit_duration, list_frequency, matrix_profitability
@@ -437,47 +441,34 @@ class RKO_Base():
         self.velocidade = velocidade    # Velocidade de deslocamento
         self.max_time = tempo           # Tempo máximo de execução para cada metaheurística (em segundos)
         self.instance_name = "Suzano_RKO_Problem"
-        list_coords, list_visits, list_frequency, _ = get_instancia_csv(lojas, inst) #Carregamento de dados da instância especificada
+        list_coords, list_visits, _, matrix_prof = get_instancia_csv(lojas, inst) #Carregamento de dados da instância especificada
 
         self.dict_best: dict = {}
 
         self.num_lojas = len(list_coords)           # Número de lojas na instância
-        self.tam_solution = 3 * sum(list_frequency) # Tamanho do vetor RKO é a soma das frequências de visitas. É 3n pois tem as partes:
-                                                    # 1. Ordem de inserção das visitas 
-                                                    # 2. Alocação de promotor/dia para cada visita
-                                                    # 3. Sequência na rota de cada visita
+
+        self.tam_solution = 9 * self.num_lojas # Tamanho do vetor RKO é 9 x o número de loja (M). É 9M pois tem as partes:
+                                                    # 1. Chaves de Frequência [0 : M-1]
+                                                    # 2. Ordem de inserção das visitas [M : 2M-1]
+                                                    # 3. Alocação de promotor/dia para cada visita [2M : 3M-1]
+                                                    # 4. Sequência na rota de cada visita [3M : 9M]
         
-        self.frequencias = list_frequency       # Lista com as frequências de visitas de cada loja
+        #self.frequencias = list_frequency      # Lista com as frequências de visitas de cada loja (NÃO USADO MAIS)
+
         self.visit_durations = list_visits      # Lista com a duração das visitas
         self.visit_coords = list_coords         # Lista com as coordenadas das lojas
+        self.matrix_prof = matrix_prof          # Matriz com as rentabilidades de cada frequência
 
         self.total_visit_duration = []
         self.total_coords = []
 
-        # Transforma dados de lojas únicas em dados de visitas individuais.
+        """
+        # Transforma dados de lojas únicas em dados de visitas individuais. (NÃO USADO MAIS)
         for i in range(len(self.frequencias)):
             for j in range(self.frequencias[i]):
                 self.total_visit_duration.append(self.visit_durations[i])
                 self.total_coords.append(self.visit_coords[i])
-        
         """
-        Ex.:
-            => ANTES (por loja):
-
-                list_coords = [(10, 20), (30, 40), (50, 60)]
-                list_visits = [60, 90, 120]
-                list_frequency = [2, 1, 3]
-
-            => DEPOIS (por visita):
-
-                total_coords = [
-                    (10, 20), (10, 20),           # Loja 0 visitada 2x
-                    (30, 40),                     # Loja 1 visitada 1x
-                    (50, 60), (50, 60), (50, 60)  # Loja 2 visitada 3x
-                ]
-                total_visit_duration = [60, 60, 90, 120, 120, 120]
-        """
-
 
         self.LS_type: str = 'Best'  # Tipo de busca local
 
@@ -510,66 +501,154 @@ class RKO_Base():
 
     def decoder(self, keys):
         """
-        => Recebe as chaves do RKO 
-        => Divide em 3 partes 
-        => Recebe os índices do vetor ordenado de order_keys 
-        => Retorna a concatenação das listas
+        Ex de Funcionamento (N=2 Lojas)
 
-        Ex.:
+        Vetor de Chaves (Input): 
+        keys = [ 0.9, 0.1 | 0.8,  0.2 | 0.3,  0.9 | 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4]
+               └─ Freq ──┘ └─ Order ─┘ └─ Prom ──┘ └─── Visit Block (Loja 0) ───┘ └── Visit Block (Loja 1) ──┘
 
-            Chaves aleatórias: keys = [0.7, 0.2, 0.9, 0.5, 0.1, 0.8 | 0.3, 0.6, 0.4, 0.2, 0.9, 0.1 | 0.5, 0.8, 0.2, 0.7, 0.3, 0.6]
-                                        └─────── order_keys ───────┘   └──── promotores_keys ────┘   └──────── visit_keys ──────┘
+        => 1. Separação e Decisão de Frequência
+           -------------------------------------
+           Freq Keys = [0.9, 0.1]
+           
+           > Loja 0 (Key 0.9):
+             Freq = int(0.9 * 6) + 1 = 5 + 1 = 6 Visitas.
+           
+           > Loja 1 (Key 0.1):
+             Freq = int(0.1 * 6) + 1 = 0 + 1 = 1 Visita.
 
-            => 1. Separação
-                order_keys = [0.7, 0.2, 0.9, 0.5, 0.1, 0.8]
-                promotores_keys = [0.3, 0.6, 0.4, 0.2, 0.9, 0.1]
-                visit_keys = [0.5, 0.8, 0.2, 0.7, 0.3, 0.6]
+        => 2. Expansão das Tarefas (Fabricação da Lista)
+           ---------------------------------------------
+           Aqui pegamos as chaves de Promotor e Visita baseadas na quantidade decidida acima.
 
-            => 2. Ordenação
-                np.argsort([0.7, 0.2, 0.9, 0.5, 0.1, 0.8])
-                -> Valores:  0.1 < 0.2 < 0.5 < 0.7 < 0.8 < 0.9
-                -> Índices:   4    1    3    0    5    2
-                order = [4, 1, 3, 0, 5, 2]
+           > Loja 0 (6 Visitas):
+             - Chave Dono (Fixa): 0.3
+             - Chaves Visita (Pega as 6 do bloco): [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+             - Gera 6 Tarefas:
+               [ (Loja 0, Dono 0.3, Visita 0.1), (Loja 0, Dono 0.3, Visita 0.2) ... até Visita 0.6 ]
 
-            => 3. Saída
-                solution = [4, 1, 3, 0, 5, 2,  # Ordem de processamento
-                0.3, 0.6, 0.4, 0.2, 0.9, 0.1,  # Keys de alocação
-                0.5, 0.8, 0.2, 0.7, 0.3, 0.6]  # Keys de sequência
+           > Loja 1 (1 Visita):
+             - Chave Dono (Fixa): 0.9
+             - Chaves Visita (Pega a 1ª do bloco): [0.9] -> Ignora [0.8, 0.7, 0.6, 0.5, 0.4]
+             - Gera 1 Tarefa:
+               [ (Loja 1, Dono 0.9, Visita 0.9) ]
+
+           Total de Tarefas Geradas: 7
+
+        => 3. Ordenação Global (Baseada em Order Keys)
+           -------------------------------------------
+           Order Keys = [0.8, 0.2]
+           
+           > Loja 0 tem prioridade 0.8 (Baixa prioridade na fila, vai para o fim).
+           > Loja 1 tem prioridade 0.2 (Alta prioridade na fila, vai para o começo).
+
+           A lista expandida é reordenada. A Loja 1 "fura a fila".
+
+        => 4. Saída (Output para o Cost)
+           -----------------------------
+           Dicionário contendo:
+           
+           order (IDs):           [1,   0,   0,   0,   0,   0,   0]
+                                   ^    ^----------------------------^
+                                 Loja1  Loja 0 (6 vezes seguidas pois tem mesma prioridade)
+
+           promotores_keys:       [0.9, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3]
+                                   ^    ^--------------------------^
+                                  Dono  Dono da Loja 0 (Repetido para garantir exclusividade)
+
+           visit_keys:            [0.9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+                                   ^    ^--------------------------^
+                                  Dia   Dias variados para as visitas da Loja 0
+
+           receita_total:         R$ (Soma do lucro da Freq 6 da Loja 0 + Freq 1 da Loja 1)
         """
+        #=======================================================
+        # 1.A. Separação do vetor de chaves
 
-        tam = len(keys)
-        tam_parts = tam // 3
-        order_keys = keys[0:tam_parts]
-        promoteres_keys = keys[tam_parts:2 * tam_parts]
-        visit_keys = keys[2 * tam_parts:tam]
+        num_lojas = self.num_lojas
+        
+        freq_keys_raw = keys[0 : num_lojas]
+        order_keys_raw = keys[num_lojas : 2*num_lojas]
+        promoter_keys_raw = keys[2*num_lojas : 3*num_lojas]
 
-        order = np.argsort(order_keys)
+        # Offset para saber quando é o início do bloco de visitas
+        offset_visit = 3 * num_lojas
 
-        return list(order) + list(promoteres_keys) + list(visit_keys)
+        #-------------------------------------------------------
+        # 1.B. Estruturas de Expansão 
+
+        order_keys_list = []      
+        promotor_keys_list = []     
+        visit_keys_list = []       
+        
+        receita_total = 0
+        mapa_ordem = {}
+
+        #=======================================================
+        # 2. Loop de Expansão 
+        for i in range(num_lojas):
+            # ----- A. Decide Frequência -----
+            freq_idx = int(freq_keys_raw[i] * 6) 
+            if freq_idx >= 6: freq_idx = 5
+
+            # Decide número de visitas
+            num_visitas = freq_idx + 1
+            
+            # ----- B. Calcula Receita -----
+            receita_total += self.matrix_prof[i][freq_idx]
+            
+            # ----- C. Guarda a chave de ordem para ordenar -----
+            mapa_ordem[i] = order_keys_raw[i]
+            
+            # ----- D. Pega a Chave do Promotor -----
+            chave_promotor_loja = promoter_keys_raw[i]
+            
+            # ----- E. Define onde começa o bloco de visitas -----
+            start_v = offset_visit + (i * 6)
+            
+            # ----- F. Expande as listas -----
+            for k in range(num_visitas):
+                order_keys_list.append(i)
+                
+                # REPETE a mesma chave de promotor N vezes
+                promotor_keys_list.append(chave_promotor_loja)
+                
+                # Pega cada chave do bloco reservado
+                visit_keys_list.append(keys[start_v + k])
+
+        #=======================================================
+        # 3. Ordenação Baseada na prioridade da loja
+        indices_ordenados = sorted(
+            range(len(order_keys_list)), 
+            key=lambda k: mapa_ordem[order_keys_list[k]]
+        )
+        
+        final_lojas = [order_keys_list[i] for i in indices_ordenados]
+        final_promotores = [promotor_keys_list[i] for i in indices_ordenados]
+        final_visitas = [visit_keys_list[i] for i in indices_ordenados]
+        
+        return {
+            "order": final_lojas,
+            "promotores_keys": final_promotores,
+            "visit_keys": final_visitas,
+            "receita_total": receita_total
+        }
     
     def cost(self, solution, view_solution=False):
-
         # 1. Separação da solução
-        tam = len(solution)
-        tam_parts = tam // 3
+        order = solution["order"]
+        promotores_keys = solution["promotores_keys"]
+        visit_keys = solution["visit_keys"]
+        receita_total = solution["receita_total"]
 
-        #order: Define qual visita processamos primeiro. Se a loja difícil for processada primeiro, ela pega os melhores horários.
-        #Se for por último, ela pega o que sobrou.
-        order = solution[0:tam_parts] 
-
-        #promotores_keys: Define quem vai atender. É usada para escolher entre os promotores existentes ou criar um novo.
-        promotores_keys = solution[tam_parts:2 * tam_parts]
-
-        #visit_keys: É usada para escolher o dia da semana (caso seja um promotor novo) ou a posição na rota (manhã/tarde).
-        visit_keys = solution[2 * tam_parts:tam] 
         #=======================================================
-
-        # 2. Inicialização
+        # 2. Inicialização com bin de promotores vazio
         promotores_bin = [Promotores(self.velocidade)]
 
+        # Inicialização da atribuição loja -> promotor
         donos_das_lojas = {}
-        #=======================================================
 
+        #=======================================================
         # 3. Processamento para cada visita
 
         """
@@ -578,16 +657,16 @@ class RKO_Base():
         O algoritmo tenta encaixar a Loja 50 no cenário vazio. Depois tenta encaixar a próxima, e assim por diante.
         """
 
-        for idx, loja in enumerate(order):
+        for idx, loja_id in enumerate(order):
             #Recupera as informações das lojas da iteração
-            loja = int(loja)
-            carga = self.total_visit_duration[loja]
-            coords = self.total_coords[loja]
+            loja = int(loja_id)
+            carga = self.visit_durations[loja]
+            coords = self.visit_coords[loja]
 
             # Chave aleatória do RKO (0.0 a 1.0) que vai decidir ONDE colocar a loja
             key = promotores_keys[idx]
-            #=======================================================
 
+            #=======================================================
             # 4. Coleta de opções
             promotores_possiveis = []
             
@@ -634,7 +713,6 @@ class RKO_Base():
                 A lista promotores_possiveis vira um Menu de Decisão: Index 0: (P0, 0) | Index 1: (P0, 1) | Index 2: (P1, 4) | Index 3: (-1, -1)
                 """
             #=======================================================
-
             # 5. Escolha e alocação baseada na Chave Aleatória (O Sorteio)
             idx_escolhido = int(key * len(promotores_possiveis))
 
@@ -650,7 +728,6 @@ class RKO_Base():
             o RKO vai evoluir para ter um key menor (ex: 0.20) nas próximas gerações, forçando a escolha do índice 0 ou 1 (Promotores existentes).
             """
             #=======================================================
-
             # 6. A Execução
 
             """
@@ -697,65 +774,13 @@ class RKO_Base():
                 donos_das_lojas[coords] = index_promotor_bin
                 
         #=======================================================
-
-        #6. Calculo da função objetivo
-
-        """
-        Função objetivo utilizada tenta maximizar: F0 = len(promotores_bin) + (menor_carga / 1000000000000)
-
-        Termo principal: número de promotorese
-            -> Minimiza o número de promotores pois é o custo principal.
-            -> Peso é 1 por promotor
+        #7. Calculo da função objetivo
         
-        Critério de desempate: Carga do promotor menos ocupado dividida por 1 mi
-            -> Penaliza desbalanceamento (um promotor muito ocioso)
-            -> Peso muito pequeno (apenas para desempate)
-
-        Ex.: 
-        # Solução A: 3 promotores balanceados       
-            Prom_0: 2400 min
-            Prom_1: 2380 min
-            Prom_2: 2350 min
-            menor_carga = 2350
-
-            FO_A = 3 + (2350 / 1000000.0)
-            FO_A = 3 + 0.002350
-            FO_A = 3.002350
-        
-        # Solução B: 3 promotores desbalanceados
-            Prom_0: 2800 min
-            Prom_1: 2750 min
-            Prom_2: 1200 min ← Muito ocioso!
-            menor_carga = 1200
-
-            FO_B = 3 + (1200 / 1000000.0)
-            FO_B = 3 + 0.001200
-            FO_B = 3.001200
-
-        Portanto A é melhor que B pois B é penalizado no desbalanceamento. FO_A > FO_B
-        """
-
-        """
-        Limitações da função objetivo atual:
-            ⚠️ Penaliza apenas o promotor MENOS ocupado (não vê sobrecargas)
-            ⚠️ Peso do desbalanceamento é muito baixo (~0.002 vs 1.0)
-            ⚠️ Não considera rentabilidade das lojas (Fase 2)
-            ⚠️ Não penaliza diretamente tempo de deslocamento
-        """
-        #=======================================================
-        
-        # --- Definição de Pesos (Custos) ---
+        # Definição de Pesos (Custos)
         P_promotor = 750.0
-        P_hr_extra = 0.3408 # (20.45 / 60)
-        P_dist = 0.06 # R$/m
+        P_hr_extra = 0.8            
+        P_dist = 0.06               # R$/m
         P_hr_extra_abusiva = 10_000 # Custo Brutal
-
-        """
-        P_promotor = 750.0
-        P_hr_extra = 0.3408 # (20.45 / 60)
-        P_dist = 0.06 # R$/m
-        P_hr_extra_abusiva = 10_000 # Custo Brutal
-        """
 
         LIMITE_HE_SEMANAL = P_promotor / P_hr_extra 
 
@@ -787,12 +812,12 @@ class RKO_Base():
             # Acumula as horas extras
             total_minutos_he_frota += he_minutos_semanal_promotor
 
-            # Aplica a Lógica de Penalidade (Ponto de Ruptura)
+            # Aplica a Lógica de Penalidade
             if he_minutos_semanal_promotor <= LIMITE_HE_SEMANAL:
                 # Zona Segura: Penalidade Padrão
                 Custo_3 += (he_minutos_semanal_promotor) * P_hr_extra
             else:
-                # Zona Abusiva: Penalidade Severa (Simula custo de contratação)
+                # Zona Abusiva: Penalidade Severa
                 excesso = he_minutos_semanal_promotor - LIMITE_HE_SEMANAL
                 
                 penalidade_normal = (LIMITE_HE_SEMANAL) * P_hr_extra
@@ -802,8 +827,9 @@ class RKO_Base():
 
         # --- Quarta Parcela : Distribuição de Carga ----
 
-        TOLERANCIA_DIFERENCA = 10 * 60
-        P_BALANCEAMENTO = 100_000
+        # Definição de Pesos (Custos)
+        Tolerancia_dif = 10 * 60
+        P_balanc = 100_000
 
         cargas_horarias = []
 
@@ -814,58 +840,89 @@ class RKO_Base():
                 maior_carga = max(cargas_horarias)
                 menor_carga = min(cargas_horarias)
                 diferenca = maior_carga - menor_carga
-                
-                # Lógica da Tolerância
-                if diferenca > TOLERANCIA_DIFERENCA:
+
+                if diferenca > Tolerancia_dif:
                     # Só penaliza o EXCEDENTE da diferença
-                    # Ex: Se a diferença for 15h e a tolerância 12h, penaliza apenas 3h.
-                    excesso_desbalanceamento = diferenca - TOLERANCIA_DIFERENCA
-                    Custo_4 = excesso_desbalanceamento * P_BALANCEAMENTO
+                    # Ex: Se a diferença for 15h e a tolerância 10h, penaliza apenas 6h.
+                    excesso_desbalanceamento = diferenca - Tolerancia_dif
+                    Custo_4 = excesso_desbalanceamento * P_balanc
                 else:
-                    # Se a diferença for menor que 12h, o custo é zero (Zona Aceitável)
+                    # Se a diferença for menor que 10h, o custo é zero
                     Custo_4 = 0
 
+        # =======================================================
         # Cálculo Final
         fitness_total = Custo_1 + Custo_2 + Custo_3 + Custo_4
-
-        # =======================================================
         
-        # Retorno Visualização (Objeto)
+        # =======================================================
+        # Retorno Visualização
         if view_solution:
-            print("\n" + "="*50)
-            print("          RELATÓRIO FINANCEIRO DETALHADO          ")
-            print("="*50)
 
             qtd_promotores = len(promotores_bin)
             
-            # 1. Custo Equipe
+            # ----- Cálculo custos operacionais -----
+            # A. Equipe
             financeiro_equipe = qtd_promotores * P_promotor
             
-            # 2. Custo Distância
+            # B. Combustível
+            # Recalcula a distância total crua
             dist_total_frota = sum([p.dist_total() for p in promotores_bin])
-            financeiro_distancia = dist_total_frota * P_dist
+            financeiro_dist = dist_total_frota * P_dist
             
-            # 3. Custo Hora Extra (Somando apenas o que excede, sem multa abusiva)
-            total_minutos_he_reais = 0
+            # C. Horas Extras
+            total_min_he_reais = 0
             for p in promotores_bin:
                 for d in range(6):
                     lim = 240 if d == 5 else 480
                     t = p.tempo_total_dia(d)
                     if t > lim:
-                        total_minutos_he_reais += (t - lim)
+                        total_min_he_reais += (t - lim)
             
-            financeiro_he = total_minutos_he_reais * P_hr_extra
+            financeiro_he = total_min_he_reais * P_hr_extra
             
-            financeiro_total = financeiro_equipe + financeiro_distancia + financeiro_he
+            custo_operacional_total = financeiro_equipe + financeiro_dist + financeiro_he
 
-            print(f"1. EQUIPE ({qtd_promotores} promotores):     R$ {financeiro_equipe:.2f}")
-            print(f"2. COMBUSTÍVEL ({dist_total_frota:.1f} un): R$ {financeiro_distancia:.2f}")
-            print(f"3. HORAS EXTRAS ({total_minutos_he_reais:.0f} min):  R$ {financeiro_he:.2f}")
-            print("-" * 50)
-            print(f"CUSTO OPERACIONAL TOTAL:      R$ {financeiro_total:.2f}")
-            print(f"FITNESS OTIMIZADO (RKO):      {fitness_total:.2f}")
+            # ----- Calculo da receita com base nas frequências -----
+
+            """
+            O cálulo da receita das duas fases é feito somando os valores correspondentes na 
+            matrix_prof[id_loja][freq] que é uma matriz LOJA X Profitability_freq sendo 
+            Profitability_freq as colunas dadas no .csv
+
+            Logo, a diferença é que na fase 1 ela encontra a profitability_freq correspondente usando as frequências dadas
+            e na fase 2 é usado as frequências encontradas pelo RKO.
+            """
+
+            #Acessa a matriz Loja x rentabilidade_freq e soma os valores
+            receita_planejada = 0
+
+            for id_loja in range(len(list_coords)):
+                freq_planejada = list_freq[id_loja]
+                if freq_planejada > 0:
+                    receita_planejada += matrix_prof[id_loja][freq_planejada - 1]
+
+            # ----- Impressão -----
+            print("\n" + "="*60)
+            print("             FINANCEIRO          ")
+            print("="*60)
+
+            print(f"RECEITAS:")
+            print(f"   - Frequências definidas (Fase 1):   R$ {receita_planejada:,.2f}")
+            print(f"   - Frequências otimizadas (Fase 2):  R$ {receita_total:,.2f}")
+
+            print("-" * 60)
+            print(f"CUSTOS OPERACIONAIS:")
+            print(f"   - Equipe ({qtd_promotores} pessoas):         R$ {financeiro_equipe:,.2f}")
+            print(f"   - Combustível ({dist_total_frota:.0f} un):       R$ {financeiro_dist:,.2f}")
+            print(f"   - Horas Extras ({total_min_he_reais:.0f} min):     R$ {financeiro_he:,.2f}")
+            print(f"   ---------------------------------------------")
+            print(f"   TOTAL CUSTOS:                 R$ {custo_operacional_total:,.2f}")
+            
+            print("-" * 60)
+            print(f"LUCRO (FASE 2):                  R$ {fitness_total - receita_total:,.2f}")
 
             return promotores_bin
+            # =======================================================
 
         # Log em Tempo Real (Console)
         if fitness_total < self.melhor_fitness_encontrado:
@@ -873,35 +930,26 @@ class RKO_Base():
             
             qtd_promotores = len(promotores_bin)
 
-            print(f" >>> [NOVO RECORD] Promotores: {qtd_promotores} | HE Total: {total_minutos_he_frota:.0f} min | (Fitness/Custo: R$ {fitness_total:.2f})")
+            print(f" >>> [NOVO RECORD] Promotores: {qtd_promotores} | HE Total: {total_minutos_he_frota:.0f} min | (Lucro: R$ {fitness_total - receita_total:.2f})")
 
-        return fitness_total
+        return fitness_total - receita_total
         
-        #=======================================================
-
-        """
-        menor_carga = 1000000000000
-        for promotor in promotores_bin:
-            if promotor.carga_total() < menor_carga:
-                menor_carga = promotor.carga_total()
-
-        if view_solution:
-            return promotores_bin
-        return len(promotores_bin) + (menor_carga / 1000000.0)
-        """
 
 veloc_100_lojas = 18 #s/unidade
 veloc_50_lojas = 15 #s/unidade
 veloc_20_lojas = 12 #s/unidade
 veloc_10_lojas = 10 #s/unidade
 
+# =========================
+#Definição do número de lojas e instância utilizada
+
+n_lojas = 50
+inst = 1
+# =========================
+
 if __name__ == "__main__":
-
-    #=========================
-    n_lojas = 10
-    inst = 1
-    #=========================
-
+    # =======================================================
+    # Dados iniciais
     mapa_velocidades = {
         10: veloc_10_lojas,
         20: veloc_20_lojas,
@@ -909,93 +957,92 @@ if __name__ == "__main__":
         100: veloc_100_lojas
     }
 
-    velocidade_atual = mapa_velocidades.get(n_lojas)
+    velocidade_atual = mapa_velocidades.get(n_lojas, 15)
+    list_coords, list_visits, list_freq, matrix_prof = get_instancia_csv(n_lojas, inst)
 
-    list_coords, list_visits, list_frequency, matriz = get_instancia_csv(n_lojas, inst)
-    
-    env = RKO_Base(60, velocidade_atual, n_lojas, inst) #Alterar Velocidade da instância
-
+    # =======================================================
+    # Solução RKO
+    env = RKO_Base(60, velocidade_atual, n_lojas, inst) 
     solver = RKO(env, print_best=True)
+    
     final_cost, final_solution, time_to_best = solver.solve(60, brkga=1, ils=1, lns=1)
     
-    solucao_final = env.cost(env.decoder(final_solution), view_solution=True) 
+    dados_decodificados = env.decoder(final_solution)
+    solucao_final = env.cost(dados_decodificados, view_solution=True)  
 
-    receita_bruta_fase1 = 0
+    # =======================================================
+    # Impressão das frequências encontradas pelo RKO
 
-    for id_loja in range(len(list_coords)):
-        # 1. Pega a frequência fixa do arquivo
-        freq_inicial = list_frequency[id_loja]
-        
-        # 2. Busca o valor na matriz de lucros
-        # A matriz é base 0 (índice 0 = freq 1), então subtraímos 1 da frequência
-        if freq_inicial > 0:
-            lucro_loja = matriz[id_loja][freq_inicial - 1]
-        else:
-            lucro_loja = 0.0
-            
-        # 3. Acumula
-        receita_bruta_fase1 += lucro_loja
+    print("\n" + "="*60)
+    print("          FREQUENCIAS E RECEITAS          ")
+    print("="*60)
+    print(f"{'ID LOJA':<10} | {'FREQ':<10} | {'RECEITA (R$)':<15}")
+    print("-" * 60)
 
-    print("-" * 40)
-    print(f"RECEITA BRUTA TOTAL (Fase 1): R$ {receita_bruta_fase1:,.2f}")
-    print("="*50 + "\n")
-
-    # --- RELATÓRIO DETALHADO E VERIFICAÇÃO ---
-    print("\n" + "="*40)
-    print("       ESTATÍSTICAS FINAIS DA FROTA       ")
-    print("="*40)
-
-    # Dicionário para rastrear conflitos: Coord -> Lista de Promotores
-    mapa_visitas_global = {}
+    lista_visitas = dados_decodificados["order"]
+    contagem_freq = Counter(lista_visitas)
     
-    total_lojas_atendidas = 0
-    total_visitas_realizadas = 0
+    receita_total_acumulada = 0
+    total_visitas_geral = 0
 
+    for id_loja in range(n_lojas):
+        freq = contagem_freq.get(id_loja, 0)
+        
+        if freq > 0:
+            # Matriz é base 0 (índice 0 = freq 1)
+            receita = env.matrix_prof[id_loja][freq - 1]
+        else:
+            receita = 0.0
+        
+        receita_total_acumulada += receita
+        total_visitas_geral += freq
+        
+        print(f"{id_loja:<10} | {freq:<10} | R$ {receita:<12.2f}")
+
+    # =======================================================
+    # Impressão dos dados dos promotores
+    print("\n" + "="*60)
+    print("          RELATÓRIO PROMOTORES          ")
+    print("="*60)
+
+    mapa_visitas_global = {}
+    total_lojas_atendidas = 0
+    
     for i, promotor in enumerate(solucao_final):
-        # 1. Coleta todas as coordenadas visitadas
         todas_coords = (
             promotor.coords_segunda + promotor.coords_terca + 
             promotor.coords_quarta + promotor.coords_quinta + 
             promotor.coords_sexta + promotor.coords_sabado
         )
         
-        # 2. Identifica lojas únicas (Set remove duplicatas do mesmo promotor)
         coords_unicas = set(todas_coords)
         
-        # 3. Converte Coordenadas -> IDs de Loja para exibição legível
         ids_lojas = []
         for coord in coords_unicas:
-            # Lógica de Conflito: Registra quem visitou essa coord
             if coord not in mapa_visitas_global:
                 mapa_visitas_global[coord] = []
             mapa_visitas_global[coord].append(i)
 
-            # Lógica de Exibição: Encontra o ID (index) na lista original
             try:
                 id_real = list_coords.index(coord)
                 ids_lojas.append(id_real)
             except ValueError:
-                ids_lojas.append("?") # Caso não ache (improvável)
+                ids_lojas.append("?")
 
-        # Ordena para ficar bonito: [0, 1, 5, 9]
         ids_lojas.sort()
         
-        # Estatísticas individuais
         carga_h = promotor.carga_total() / 60.0
         num_visitas = len(todas_coords)
-        
-        # Acumuladores globais
         total_lojas_atendidas += len(coords_unicas)
-        total_visitas_realizadas += num_visitas
 
-        # --- IMPRESSÃO DO PROMOTOR ---
-
-        cargas_dias = {"Segunda" : promotor.carga_segunda, 
-                       "Terça" : promotor.carga_terca, 
-                       "Quarta" : promotor.carga_quarta, 
-                       "Quinta" : promotor.carga_quinta, 
-                       "Sexta" : promotor.carga_sexta, 
-                       "Sabado" : promotor.carga_sabado}
+        cargas_dias = {
+            "Segunda" : promotor.carga_segunda, 
+            "Terça"   : promotor.carga_terca, 
+            "Quarta"  : promotor.carga_quarta, 
+            "Quinta"  : promotor.carga_quinta, 
+            "Sexta"   : promotor.carga_sexta, 
+            "Sábado"  : promotor.carga_sabado
+        }
 
         print(f"PROMOTOR {i}")
         print(f"  > Carga Horária: {carga_h:.1f}h")
@@ -1003,26 +1050,22 @@ if __name__ == "__main__":
         print(f"  > Carteira ({len(ids_lojas)} lojas): {ids_lojas}\n")
 
         for dia, minutos in cargas_dias.items():
-            print(f"  > Carga {dia}: {minutos/60:.1f}h")
+            if minutos > 0:
+                print(f"  > Carga {dia}: {minutos/60:.1f}h")
 
         print("-" * 60)
 
-    # --- ESTATÍSTICAS GERAIS ---
+    # =======================================================
+    # Impressão das estatísticas Gerais (Média Lojas e Conflito de distribuição)
     if len(solucao_final) > 0:
         media_lojas = total_lojas_atendidas / len(solucao_final)
         print(f"\nMÉDIAS DA EQUIPE:")
         print(f"  Lojas/Promotor: {media_lojas:.2f}")
     
-    # --- RELATÓRIO DE CONFLITOS ---
-    print("\n" + "="*60)
-    print("          VERIFICAÇÃO DE EXCLUSIVIDADE          ")
-    print("="*60)
-    
     tem_conflito = False
     for coord, lista_promotores in mapa_visitas_global.items():
         if len(lista_promotores) > 1:
             tem_conflito = True
-            # Recupera o ID para mostrar no erro
             try:
                 id_loja = list_coords.index(coord)
                 nome_loja = f"Loja ID {id_loja}"
@@ -1036,8 +1079,7 @@ if __name__ == "__main__":
     else:
         print(" [FALHA] Existem lojas com múltiplos donos.\n")
 
-    #========================================
-
+    # =======================================================
     # Loop de Plotagem
     while True:
         try:
