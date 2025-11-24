@@ -118,6 +118,21 @@ class Promotores:
         
         elif dia == 5:
             return self.carga_sabado
+        
+    def ja_visitou_no_dia(self, dia, coord_loja):
+        """
+        Verifica se o promotor já tem uma visita agendada para esta loja neste dia.
+        Retorna True se já visitou.
+        """
+        if dia == 0: lista_dia = self.coords_segunda
+        elif dia == 1: lista_dia = self.coords_terca
+        elif dia == 2: lista_dia = self.coords_quarta
+        elif dia == 3: lista_dia = self.coords_quinta
+        elif dia == 4: lista_dia = self.coords_sexta
+        elif dia == 5: lista_dia = self.coords_sabado
+        else: return False
+
+        return coord_loja in lista_dia
 
     def adicionar_loja(self, dia, coord, carga, ordem_loja):
         """
@@ -378,6 +393,84 @@ class Promotores:
             distancia += np.linalg.norm(np.array(cidade_atual) - np.array(proxima_cidade))
 
         return distancia
+    
+def plotar_rotas_unificadas(solucao, dia_idx):
+    """
+    Plota as rotas com correção para números sobrepostos.
+    """
+    
+    mapa_dias = {
+        0: ('coords_segunda', 'Segunda-feira'),
+        1: ('coords_terca', 'Terça-feira'),
+        2: ('coords_quarta', 'Quarta-feira'),
+        3: ('coords_quinta', 'Quinta-feira'),
+        4: ('coords_sexta', 'Sexta-feira'),
+        5: ('coords_sabado', 'Sábado')
+    }
+    
+    if dia_idx not in mapa_dias:
+        print("Dia inválido.")
+        return
+
+    attr_name, nome_dia = mapa_dias[dia_idx]
+    
+    plt.figure(figsize=(12, 10))
+    plt.title(f"Visão Geral da Frota - {nome_dia}", fontsize=16)
+    plt.xlabel("Coordenada X")
+    plt.ylabel("Coordenada Y")
+    plt.grid(True, linestyle='--', alpha=0.6)
+
+    cmap = plt.get_cmap('tab20')
+    promotores_ativos = 0
+
+    # Dicionário para controlar sobreposição de texto
+    # Chave: (x, y) -> Valor: Quantidade de vezes que plotamos ali
+    posicoes_ocupadas = {}
+
+    for i, promotor in enumerate(solucao):
+        coords = getattr(promotor, attr_name)
+        
+        if not coords:
+            continue 
+        
+        promotores_ativos += 1
+        
+        xs = [c[0] for c in coords]
+        ys = [c[1] for c in coords]
+        
+        cor = cmap(i % 20)
+        
+        # Plota a linha (Rota)
+        plt.plot(xs, ys, linestyle='-', color=cor, alpha=0.6, label=f'Promotor {i}')
+        
+        # Plota os pontos (Lojas) - Todos pretos conforme você pediu
+        plt.scatter(xs, ys, color='black', zorder=10, s=30)
+
+        # Adiciona os números com deslocamento inteligente
+        for ordem, (x, y) in enumerate(coords):
+            coord_chave = (x, y)
+            
+            # Verifica quantas vezes já escrevemos nessa coordenada
+            deslocamento = posicoes_ocupadas.get(coord_chave, 0)
+            posicoes_ocupadas[coord_chave] = deslocamento + 1
+            
+            # Calcula um offset baseado na quantidade de repetições
+            # Vai empilhando os números verticalmente
+            offset_y = 1.5 + (deslocamento * 3.0) 
+            
+            texto = str(ordem + 1)
+            
+            plt.text(x + 1.5, y + offset_y, texto, 
+                     color=cor, fontsize=10, fontweight='bold', zorder=15)
+
+    if promotores_ativos == 0:
+        print(f"Nenhum promotor tem visitas agendadas para {nome_dia}.")
+        plt.close()
+        return
+
+    plt.legend(loc='best', title="Equipe")
+    plt.tight_layout()
+    plt.show()
 
 def get_instancia_csv(num_lojas: int, num_instancia: int) -> pd.DataFrame:
     """
@@ -658,7 +751,7 @@ class RKO_Base():
         """
 
         for idx, loja_id in enumerate(order):
-            #Recupera as informações das lojas da iteração
+            # Recupera as informações das lojas da iteração
             loja = int(loja_id)
             carga = self.visit_durations[loja]
             coords = self.visit_coords[loja]
@@ -667,118 +760,111 @@ class RKO_Base():
             key = promotores_keys[idx]
 
             #=======================================================
-            # 4. Coleta de opções
+            # 4. Coleta de opções (COM RESTRIÇÃO DE 1 VISITA/DIA E DONO ÚNICO)
             promotores_possiveis = []
             
-            #Loja já possui promotor
+            # Loja JÁ possui promotor (TODAS as visitas devem ir para o mesmo promotor)
             if coords in donos_das_lojas:
-                #Recupera qual o promotor
+                # Recupera qual o promotor DONO
                 idx_dono = donos_das_lojas[coords]
                 promotor_dono = promotores_bin[idx_dono]
 
-                #Verifica quais seus dias disponíveis
+                # Verifica quais dias estão disponíveis
                 dias_validos = promotor_dono.dias_possiveis(carga)
+                
+                # Filtra apenas os dias onde a loja ainda NÃO foi visitada
                 for dia in dias_validos:
-                    promotores_possiveis.append((idx_dono, dia))
+                    if not promotor_dono.ja_visitou_no_dia(dia, coords):
+                        promotores_possiveis.append((idx_dono, dia))
+                
+                # CRÍTICO: Se o dono não tem mais dias disponíveis, 
+                # a solução é INVÁLIDA (penalidade será aplicada automaticamente)
+                # Não criamos novo promotor aqui para manter a restrição de dono único
+                
+                if len(promotores_possiveis) == 0:
+                    # Força alocar no melhor dia possível do dono, mesmo com hora extra
+                    # Escolhe o dia com menor carga atual
+                    cargas_dias_dono = [
+                        (0, promotor_dono.carga_segunda),
+                        (1, promotor_dono.carga_terca),
+                        (2, promotor_dono.carga_quarta),
+                        (3, promotor_dono.carga_quinta),
+                        (4, promotor_dono.carga_sexta),
+                        (5, promotor_dono.carga_sabado)
+                    ]
+                    
+                    # Filtra apenas dias que ainda não têm esta loja
+                    dias_sem_loja = [
+                        (d, c) for d, c in cargas_dias_dono 
+                        if not promotor_dono.ja_visitou_no_dia(d, coords)
+                    ]
+                    
+                    if len(dias_sem_loja) > 0:
+                        # Escolhe o dia com menor carga
+                        dia_escolhido = min(dias_sem_loja, key=lambda x: x[1])[0]
+                        promotores_possiveis.append((idx_dono, dia_escolhido))
+                    else:
+                        # Caso extremo: todos os 6 dias já têm a loja
+                        # Isso só acontece se freq > 6 (impossível no seu modelo)
+                        # Mas por segurança, coloca no primeiro dia
+                        promotores_possiveis.append((idx_dono, 0))
 
-            #Loja ainda não possui promotor
+            # Loja AINDA NÃO possui promotor (primeira visita)
             else:
-                """
-                O loop abaixo verifica para cada promotor existente se há espaço.
-                Por conta de ser uma restrição não rígida, a resposta é sempre "Sim" (mesmo que gere Hora Extra).
-                """
-
-                #Opção A: Tenta alocar loja num promotor já existente
+                # Opção A: Tenta alocar em promotor existente
                 for i in range(len(promotores_bin)):
-                    #Sempre haverá dias disponíveis, contudo ou será com hr extra ou será tempo livre de um novo promotor
                     if promotores_bin[i].total_lojas_unicas() < 8:
                         dias_validos = promotores_bin[i].dias_possiveis(carga)
                         for dia in dias_validos:
-                            promotores_possiveis.append((i, dia))
+                            if not promotores_bin[i].ja_visitou_no_dia(dia, coords):
+                                promotores_possiveis.append((i, dia))
 
-                #Opção B: Contratar novo promotor
-                promotores_possiveis.append((-1, -1)) 
+                # Opção B: Contratar novo promotor (SEMPRE disponível)
+                promotores_possiveis.append((-1, -1))
 
-                """
-                Ex.:
-
-                O código pergunta: "Quais são as jogadas possíveis agora?"
-
-                Imagine que já existem 2 promotores (P0 e P1):
-
-                -P0 diz: "Posso atender na Segunda ou na Terça". => Adiciona (0, 0) e (0, 1) na lista.
-                -P1 diz: "Estou lotado, mas posso na Sexta com hora extra". => Adiciona (1, 4) na lista.
-                -RH diz: "Sempre podemos contratar alguém novo". => Adiciona (-1, -1).
-                
-                A lista promotores_possiveis vira um Menu de Decisão: Index 0: (P0, 0) | Index 1: (P0, 1) | Index 2: (P1, 4) | Index 3: (-1, -1)
-                """
             #=======================================================
-            # 5. Escolha e alocação baseada na Chave Aleatória (O Sorteio)
+            # 5. Escolha e alocação baseada na Chave Aleatória
             idx_escolhido = int(key * len(promotores_possiveis))
-
-            """
-            Aqui usa-se a chave aleatória (key) (um número entre 0.00 e 0.99) para escolher um item do menu.
-            
-            Matemáticamente: Se a lista tem 4 opções e o key é 0.80: 
-                0.80 . 4 = 3.2
-                int(3.2) = 3
-                
-            O algoritmo escolhe o item de índice 3 (Criar Novo Promotor).
-            O Aprendizado: Se escolher o índice 3 for uma decisão ruim (custar muito caro), 
-            o RKO vai evoluir para ter um key menor (ex: 0.20) nas próximas gerações, forçando a escolha do índice 0 ou 1 (Promotores existentes).
-            """
-            #=======================================================
-            # 6. A Execução
-
-            """
-            Proteção contra erros de arredondamento:
-
-            -Se a lista tem tamanho 5 e a chave for muito próxima de 1.0, a conta int(1.0 * 5) dá 5.
-
-            -Mas os índices de uma lista de tamanho 5 são 0, 1, 2, 3, 4. O índice 5 daria erro (IndexError).
-
-            -Essa linha garante que, se a matemática "passar do ponto", nós pegamos o último item da lista.
-            """
             
             if idx_escolhido >= len(promotores_possiveis):
                 idx_escolhido = len(promotores_possiveis) - 1
 
-            """
-            Aqui pegamos a opção que ganhou o sorteio: 
-            -Se a tupla for (-1, -1), as variáveis recebem -1 (Sinal de Novo Promotor).
-            -Se a tupla for (0, 2), significa "Promotor 0, Dia 2 (Quarta)".
-            """
             index_promotor_bin, dia_promotor_bin = promotores_possiveis[idx_escolhido]
 
-            #Se o índice for de um novo promotor, adiciona-se um novo na lista de promotores
+            #=======================================================
+            # 6. A Execução
+            
+            # Se o índice for de um novo promotor
             if index_promotor_bin == -1:
                 new_promotor = Promotores(self.velocidade)
                 
-                #Decisão do dia inicial
+                # Decisão do dia inicial
                 dia_novo = int(visit_keys[idx] * 6)
-                if dia_novo >= 6: dia_novo = 5
+                if dia_novo >= 6: 
+                    dia_novo = 5
                 
-                #Decide onde vai adicionar a loja na rota do promotor
+                # Adiciona a loja na rota do novo promotor
                 new_promotor.adicionar_loja(dia_novo, coords, carga, visit_keys[idx])
                 promotores_bin.append(new_promotor)
 
-                #Registrando qual loja pertence a qual promotor
+                # REGISTRA o dono da loja (PRIMEIRA VEZ)
                 donos_das_lojas[coords] = len(promotores_bin) - 1
 
-            #Se o promotor já existe, adiciona-se a loja na sua rota com base na visit_keys    
+            # Se o promotor já existe, adiciona a loja
             else:
                 promotor = promotores_bin[index_promotor_bin]
                 promotor.adicionar_loja(dia_promotor_bin, coords, carga, visit_keys[idx])
 
-                #Registrando qual loja pertence a qual promotor
-                donos_das_lojas[coords] = index_promotor_bin
-                
+                # Se for a primeira visita desta loja, registra o dono
+                if coords not in donos_das_lojas:
+                    donos_das_lojas[coords] = index_promotor_bin
+                    
         #=======================================================
         #7. Calculo da função objetivo
         
         # Definição de Pesos (Custos)
         P_promotor = 750.0
-        P_hr_extra = 0.8            
+        P_hr_extra = 0.95            
         P_dist = 0.06               # R$/m
         P_hr_extra_abusiva = 10_000 # Custo Brutal
 
@@ -1081,18 +1167,23 @@ if __name__ == "__main__":
 
     # =======================================================
     # Loop de Plotagem
+    print("\n--- Visualização de Rotas ---")
     while True:
         try:
-            entrada = input("Digite o número do promotor para plotar a rota (ou -1 para sair): ")
-            promotor = int(entrada)
-            if promotor == -1:
+            print("\nDigite o dia para visualizar a rota de TODOS os promotores:")
+            entrada = input("(0=Seg, 1=Ter, 2=Qua, 3=Qui, 4=Sex, 5=Sab, -1=Sair): ")
+            
+            dia = int(entrada)
+            
+            if dia == -1:
+                print("Encerrando...")
                 break
             
-            dia = int(input("Digite o dia (0=Seg, 1=Ter, 2=Qua, 3=Qui, 4=Sex, 5=Sab): "))
-            
-            if 0 <= promotor < len(solucao_final):
-                solucao_final[promotor].plot_rota(dia)
+            if 0 <= dia <= 5:
+                # Chama a função nova passando a lista completa de soluções
+                plotar_rotas_unificadas(solucao_final, dia)
             else:
-                print("Promotor inválido.")
+                print("Dia inválido. Digite entre 0 e 5.")
+                
         except ValueError:
-            print("Entrada inválida.")
+            print("Entrada inválida. Digite um número.")
