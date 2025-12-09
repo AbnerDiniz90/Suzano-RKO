@@ -7,12 +7,13 @@ current_directory = os.path.dirname(os.path.abspath(__file__))
 project_root_directory = os.path.dirname(current_directory)
 sys.path.append(project_root_directory)
 from RKO import RKO
+from clusters import ClusterizadorLojas
 import matplotlib.pyplot as plt
 import numpy as np
 import matplotlib.pyplot as plt
 
 class Promotores:
-    def __init__(self, velocidade):
+    def __init__(self, velocidade, cluster_id=None):
         """
         Definição inicial de um promotor e sua agenda inicial.
 
@@ -48,6 +49,9 @@ class Promotores:
         self.coords_sabado = []
         self.carga_sabado = 0
         self.cargas_sabado = []
+
+        self.cluster_id = cluster_id  #Região que este promotor atende
+        self.cluster_designado = cluster_id is not None
 
     def dist_total(self):
 
@@ -304,8 +308,37 @@ class Promotores:
             print(f"Sem lojas para plotar no dia {nome_dia}.")
             return
 
+        print(f"\n🔍 DEBUG - {nome_dia}:")
+        print(f"   Número de lojas: {len(coords)}")
+        print(f"   Primeira coord: {coords[0]} (tipo: {type(coords[0])})")
+        print(f"   Última coord: {coords[-1]}")
 
-        coords_array = np.array(coords)
+        try:
+            coords_lista = []
+
+            for i, coord in enumerate(coords):
+                if isinstance(coord, (tuple, list)) and len(coord) == 2:
+                    x, y = coord
+                    coords_lista.append([float(x), float(y)])
+                else:
+                    print(f"Coordenada {i} com formato inválido: {coord}")
+                    return
+            
+            coords_array = np.array(coords_lista, dtype=float)
+
+            if coords_array.shape[1] != 2:
+                print(f"Erro: Array com formato inesperado: {coords_array.shape}")
+                print(f"   Array: {coords_array}")
+                return
+            
+            print(f"   Array shape: {coords_array.shape}")
+            print(f"   Range X: [{coords_array[:, 0].min():.2f}, {coords_array[:, 0].max():.2f}]")
+            print(f"   Range Y: [{coords_array[:, 1].min():.2f}, {coords_array[:, 1].max():.2f}]")
+
+        except Exception as e:
+            print(f"Erro ao converter coordenadas: {e}")
+            print(f"   Coords originais: {coords}")
+            return
         
         # Ajusta o tamanho da figura
         plt.figure(figsize=(10, 8))
@@ -437,28 +470,46 @@ class RKO_Base():
         self.velocidade = velocidade    # Velocidade de deslocamento
         self.max_time = tempo           # Tempo máximo de execução para cada metaheurística (em segundos)
         self.instance_name = "Suzano_RKO_Problem"
+
         list_coords, list_visits, list_frequency, _ = get_instancia_csv(lojas, inst) #Carregamento de dados da instância especificada
 
-        self.dict_best: dict = {}
-
         self.num_lojas = len(list_coords)           # Número de lojas na instância
-        self.tam_solution = 3 * sum(list_frequency) # Tamanho do vetor RKO é a soma das frequências de visitas. É 3n pois tem as partes:
-                                                    # 1. Ordem de inserção das visitas 
-                                                    # 2. Alocação de promotor/dia para cada visita
-                                                    # 3. Sequência na rota de cada visita
-        
         self.frequencias = list_frequency       # Lista com as frequências de visitas de cada loja
         self.visit_durations = list_visits      # Lista com a duração das visitas
         self.visit_coords = list_coords         # Lista com as coordenadas das lojas
 
+        #Clusterização
+        self.clusterizador = ClusterizadorLojas(
+            coords=self.visit_coords,
+            frequencias=self.frequencias,
+            metodo='kmeans',
+            num_clusters='auto',  # ou especifique um número
+            ponderar_por_frequencia=False  # False = mais equilibrado
+        )
+        #Executa clusterização
+        self.cluster_labels = self.clusterizador.clusterizar()
+
         self.total_visit_duration = []
         self.total_coords = []
+        
+        #Mapeia cada VISITA ao seu cluster
+        #IMPORTANTE: Múltiplas visitas da mesma loja têm o MESMO cluster
+        self.cluster_por_visita = []
 
-        # Transforma dados de lojas únicas em dados de visitas individuais.
         for i in range(len(self.frequencias)):
+            cluster_id = self.clusterizador.get_cluster_da_loja(i)
             for j in range(self.frequencias[i]):
                 self.total_visit_duration.append(self.visit_durations[i])
                 self.total_coords.append(self.visit_coords[i])
+                self.cluster_por_visita.append(cluster_id)
+        
+        #Visualização (opcional)
+        #self.clusterizador.visualizar()
+
+        self.tam_solution = 3 * sum(list_frequency)
+
+        """"""
+        self.dict_best: dict = {}
         
         """
         Ex.:
@@ -565,7 +616,8 @@ class RKO_Base():
         #=======================================================
 
         # 2. Inicialização
-        promotores_bin = [Promotores(self.velocidade)]
+        #Antigo: promotores_bin = [Promotores(self.velocidade)]
+        promotores_bin = []
 
         donos_das_lojas = {}
         #=======================================================
@@ -588,6 +640,9 @@ class RKO_Base():
             key = promotores_keys[idx]
             #=======================================================
 
+            #Identifica o cluster da visita atual
+            cluster_da_visita = self.cluster_por_visita[loja]
+
             # 4. Coleta de opções
             promotores_possiveis = []
             
@@ -597,7 +652,11 @@ class RKO_Base():
                 idx_dono = donos_das_lojas[coords]
                 promotor_dono = promotores_bin[idx_dono]
 
-                #Verifica quais seus dias disponíveis
+                # VALIDAÇÃO: Confirma que o dono está no cluster correto
+                assert promotor_dono.cluster_id == cluster_da_visita, \
+                    f"Erro: Promotor {idx_dono} (Cluster {promotor_dono.cluster_id}) " \
+                    f"não deveria ter a loja no Cluster {cluster_da_visita}"
+                
                 dias_validos = promotor_dono.dias_possiveis(carga)
                 for dia in dias_validos:
                     promotores_possiveis.append((idx_dono, dia))
@@ -611,14 +670,22 @@ class RKO_Base():
 
                 #Opção A: Tenta alocar loja num promotor já existente
                 for i in range(len(promotores_bin)):
-                    #Sempre haverá dias disponíveis, contudo ou será com hr extra ou será tempo livre de um novo promotor
-                    if promotores_bin[i].total_lojas_unicas() < 8:
-                        dias_validos = promotores_bin[i].dias_possiveis(carga)
-                        for dia in dias_validos:
-                            promotores_possiveis.append((i, dia))
-
-                #Opção B: Contratar novo promotor
+                    promotor = promotores_bin[i]
+            
+                    # REGRA DE OURO: Promotor só pega loja do seu cluster
+                    if promotor.cluster_id == cluster_da_visita:
+                        if promotor.total_lojas_unicas() < 8:
+                            dias_validos = promotor.dias_possiveis(carga)
+                            for dia in dias_validos:
+                                promotores_possiveis.append((i, dia))
+                
+                # Sempre permite criar novo promotor (designado ao cluster)
                 promotores_possiveis.append((-1, -1)) 
+
+            # Proteção contra lista vazia
+            if len(promotores_possiveis) == 0:
+                # Força criação de novo promotor
+                promotores_possiveis.append((-1, -1))
 
                 """
                 Ex.:
@@ -663,8 +730,11 @@ class RKO_Base():
             -Essa linha garante que, se a matemática "passar do ponto", nós pegamos o último item da lista.
             """
             
+            idx_escolhido = int(key * len(promotores_possiveis))
             if idx_escolhido >= len(promotores_possiveis):
                 idx_escolhido = len(promotores_possiveis) - 1
+            
+            index_promotor_bin, dia_promotor_bin = promotores_possiveis[idx_escolhido]
 
             """
             Aqui pegamos a opção que ganhou o sorteio: 
@@ -675,17 +745,13 @@ class RKO_Base():
 
             #Se o índice for de um novo promotor, adiciona-se um novo na lista de promotores
             if index_promotor_bin == -1:
-                new_promotor = Promotores(self.velocidade)
-                
-                #Decisão do dia inicial
+                new_promotor = Promotores(self.velocidade, cluster_id=cluster_da_visita)
+        
                 dia_novo = int(visit_keys[idx] * 6)
                 if dia_novo >= 6: dia_novo = 5
                 
-                #Decide onde vai adicionar a loja na rota do promotor
                 new_promotor.adicionar_loja(dia_novo, coords, carga, visit_keys[idx])
                 promotores_bin.append(new_promotor)
-
-                #Registrando qual loja pertence a qual promotor
                 donos_das_lojas[coords] = len(promotores_bin) - 1
 
             #Se o promotor já existe, adiciona-se a loja na sua rota com base na visit_keys    
@@ -805,25 +871,17 @@ class RKO_Base():
         TOLERANCIA_DIFERENCA = 10 * 60
         P_BALANCEAMENTO = 100_000
 
-        cargas_horarias = []
+        Custo_4 = 0
 
-        for p in promotores_bin:
-            cargas_horarias.append(p.carga_total())
-            
-            if len(cargas_horarias) > 1:
-                maior_carga = max(cargas_horarias)
-                menor_carga = min(cargas_horarias)
-                diferenca = maior_carga - menor_carga
-                
-                # Lógica da Tolerância
-                if diferenca > TOLERANCIA_DIFERENCA:
-                    # Só penaliza o EXCEDENTE da diferença
-                    # Ex: Se a diferença for 15h e a tolerância 12h, penaliza apenas 3h.
-                    excesso_desbalanceamento = diferenca - TOLERANCIA_DIFERENCA
-                    Custo_4 = excesso_desbalanceamento * P_BALANCEAMENTO
-                else:
-                    # Se a diferença for menor que 12h, o custo é zero (Zona Aceitável)
-                    Custo_4 = 0
+        if len(promotores_bin) > 1:
+            cargas_horarias = [p.carga_total() for p in promotores_bin]
+            maior_carga = max(cargas_horarias)
+            menor_carga = min(cargas_horarias)
+            diferenca = maior_carga - menor_carga
+
+            if diferenca > TOLERANCIA_DIFERENCA:
+                excesso_desbalanceamento = diferenca - TOLERANCIA_DIFERENCA
+                Custo_4 = excesso_desbalanceamento * P_BALANCEAMENTO
 
         # --- Quinta Parcela: Garantir frequência mínima das lojas ---
         P_FREQUENCIA = 1_000_000  # penalização grande
@@ -852,6 +910,34 @@ class RKO_Base():
             if visitas_realizadas < visitas_necessarias:
                 deficit = visitas_necessarias - visitas_realizadas
                 Custo_5 += deficit * P_FREQUENCIA
+
+        #Opcional
+        """
+        P_VIOLACAO_CLUSTER = 1_000_000  # Penalidade severa
+        Custo_6 = 0
+
+        for promotor in promotores_bin:
+            todas_coords = (promotor.coords_segunda + promotor.coords_terca + 
+                        promotor.coords_quarta + promotor.coords_quinta + 
+                        promotor.coords_sexta + promotor.coords_sabado)
+            
+            if len(todas_coords) > 0:
+                clusters_atendidos = set()
+                for coord in todas_coords:
+                    idx_loja = self.visit_coords.index(coord)
+                    cluster = self.clusterizador.get_cluster_da_loja(idx_loja)
+                    clusters_atendidos.add(cluster)
+                
+                # Penaliza PESADAMENTE se atender múltiplos clusters
+                if len(clusters_atendidos) > 1:
+                    num_violacoes = len(clusters_atendidos) - 1
+                    Custo_6 += num_violacoes * P_VIOLACAO_CLUSTER
+                    
+                    if view_solution:
+                        print(f"AVISO: Promotor atende {len(clusters_atendidos)} clusters!")
+        
+        fitness_total = Custo_1 + Custo_2 + Custo_3 + Custo_4 + Custo_5 + Custo_6
+        """
 
         # Cálculo Final
         fitness_total = Custo_1 + Custo_2 + Custo_3 + Custo_4 + Custo_5
@@ -893,6 +979,9 @@ class RKO_Base():
             print(f"CUSTO OPERACIONAL TOTAL:      R$ {financeiro_total:.2f}")
             print(f"FITNESS OTIMIZADO (RKO):      {fitness_total:.2f}")
 
+            #Validar exclusividade no cluster
+            self.clusterizador.validar_exclusividade(promotores_bin, self.visit_coords)
+
             return promotores_bin
 
         # Log em Tempo Real (Console)
@@ -902,6 +991,10 @@ class RKO_Base():
             qtd_promotores = len(promotores_bin)
 
             print(f" >>> [NOVO RECORD] Promotores: {qtd_promotores} | HE Total: {total_minutos_he_frota:.0f} min | (Fitness/Custo: R$ {fitness_total:.2f})")
+
+            if view_solution:
+                #Valida exclusividade
+                self.clusterizador.validar_exclusividade(promotores_bin, self.visit_coords)
 
         return fitness_total
         
@@ -917,6 +1010,20 @@ class RKO_Base():
             return promotores_bin
         return len(promotores_bin) + (menor_carga / 1000000.0)
         """
+
+def verificar_clusters(env):
+    """
+    Plota os clusters
+    """
+    print("\n📊 Gerando visualização dos clusters...")
+        
+    # Chama o método _imprimir_estatisticas para mostrar dados
+    env.clusterizador._imprimir_estatisticas()
+        
+    # Plota os clusters
+    env.clusterizador.plot_clusters()
+        
+    print("✅ Visualização concluída!")
 
 veloc_100_lojas = 18 #s/unidade
 veloc_50_lojas = 15 #s/unidade
@@ -942,6 +1049,13 @@ if __name__ == "__main__":
     list_coords, list_visits, list_frequency, matriz = get_instancia_csv(n_lojas, inst)
     
     env = RKO_Base(60, velocidade_atual, n_lojas, inst) #Alterar Velocidade da instância
+
+    #Entender os clusters criados
+    print("\n" + "="*80)
+    print("                    ANÁLISE DE CLUSTERIZAÇÃO")
+    print("="*80)
+
+    verificar_clusters(env)
 
     solver = RKO(env, print_best=True)
     final_cost, final_solution, time_to_best = solver.solve(60, brkga=1, ils=1, lns=1)
