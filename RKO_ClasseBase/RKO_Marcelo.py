@@ -270,76 +270,141 @@ class Promotores:
 
     def plot_rota(self, dia):
         
-        if dia == 0:
-            coords = self.coords_segunda
-            carga_dia = self.carga_segunda
-            max_carga_dia = 480
-            nome_dia = "Segunda-feira"
-        elif dia == 1:
-            coords = self.coords_terca
-            carga_dia = self.carga_terca
-            max_carga_dia = 480
-            nome_dia = "Terça-feira"
-        elif dia == 2:
-            coords = self.coords_quarta
-            carga_dia = self.carga_quarta
-            max_carga_dia = 480
-            nome_dia = "Quarta-feira"
-        elif dia == 3:
-            coords = self.coords_quinta
-            carga_dia = self.carga_quinta
-            max_carga_dia = 480
-            nome_dia = "Quinta-feira"
-        elif dia == 4:
-            coords = self.coords_sexta
-            carga_dia = self.carga_sexta
-            max_carga_dia = 480
-            nome_dia = "Sexta-feira"
-        elif dia == 5:
-            coords = self.coords_sabado
-            carga_dia = self.carga_sabado
-            max_carga_dia = 320
-            nome_dia = "Sábado"
-        else:
+        dias_info = {
+            0: (self.coords_segunda, self.carga_segunda, 480, "Segunda-feira"),
+            1: (self.coords_terca, self.carga_terca, 480, "Terça-feira"),
+            2: (self.coords_quarta, self.carga_quarta, 480, "Quarta-feira"),
+            3: (self.coords_quinta, self.carga_quinta, 480, "Quinta-feira"),
+            4: (self.coords_sexta, self.carga_sexta, 480, "Sexta-feira"),
+            5: (self.coords_sabado, self.carga_sabado, 240, "Sábado")
+        }
+        
+        if dia not in dias_info:
             print("Dia inválido para plotagem.")
             return
 
+        coords, carga_dia, max_carga_dia, nome_dia = dias_info[dia]
+
         if not coords:
-            print(f"Sem lojas para plotar no dia {nome_dia}.")
+            print(f"⚠️  Sem lojas para plotar no dia {nome_dia}.")
             return
 
-        print(f"\n🔍 DEBUG - {nome_dia}:")
-        print(f"   Número de lojas: {len(coords)}")
-        print(f"   Primeira coord: {coords[0]} (tipo: {type(coords[0])})")
-        print(f"   Última coord: {coords[-1]}")
+        print("\n" + "="*80)
+        print(f"       🔍 DEBUG DETALHADO - {nome_dia.upper()}")
+        print("="*80)
+        
+        print(f"\n📊 Informações Gerais:")
+        print(f"   - Promotor: {self.nome_promotor}")
+        print(f"   - Cluster: {self.cluster_id}")
+        print(f"   - Número de visitas no dia: {len(coords)}")
+        print(f"   - Carga total: {carga_dia / 60.0:.2f}h / {max_carga_dia / 60.0:.1f}h")
+        
+        if carga_dia > max_carga_dia:
+            hora_extra = (carga_dia - max_carga_dia) / 60.0
+            print(f"   - ⚠️  HORA EXTRA: {hora_extra:.2f}h")
+        
+        # Calcula distância total do dia
+        dist_dia = self.distancia(coords)
+        print(f"   - Distância percorrida: {dist_dia:.2f} unidades")
 
+        #===============================
+        # Detalhes de cada loja visitada
+        #===============================
+        print(f"\n📍 Lojas Visitadas (em ordem de visita):")
+        print("-" * 80)
+        
+        for i, coord in enumerate(coords):
+            # Informações básicas
+            print(f"\n{i + 1}. Coordenada: {coord}")
+            
+            # Se env foi passado, mostra informações extras
+            if env is not None:
+                try:
+                    # Encontra o índice da loja
+                    idx_loja = env.visit_coords.index(coord)
+                    
+                    # Pega informações da loja
+                    freq = env.frequencias[idx_loja]
+                    duracao = env.visit_durations[idx_loja]
+                    cluster = env.clusterizador.get_cluster_da_loja(idx_loja)
+                    
+                    print(f"   ID da Loja: {idx_loja}")
+                    print(f"   Frequência semanal: {freq}x")
+                    print(f"   Duração da visita: {duracao} min")
+                    print(f"   Cluster: {cluster}")
+                    
+                    # Verifica se cluster está correto
+                    if cluster != self.cluster_id:
+                        print(f"   ⚠️  PROBLEMA: Loja do Cluster {cluster}, mas promotor é do Cluster {self.cluster_id}!")
+                    
+                    # Calcula distância até próxima loja
+                    if i < len(coords) - 1:
+                        proxima_coord = coords[i + 1]
+                        dist_proxima = np.linalg.norm(
+                            np.array(coord) - np.array(proxima_coord)
+                        )
+                        tempo_deslocamento = (dist_proxima * self.velocidade) / 60
+                        print(f"   → Distância até próxima: {dist_proxima:.2f} un ({tempo_deslocamento:.1f} min)")
+                
+                except ValueError:
+                    print(f"   ⚠️  Coordenada não encontrada na lista de lojas!")
+            else:
+                # Sem env, mostra apenas distância até próxima
+                if i < len(coords) - 1:
+                    proxima_coord = coords[i + 1]
+                    dist_proxima = np.linalg.norm(
+                        np.array(coord) - np.array(proxima_coord)
+                    )
+                    print(f"   → Distância até próxima: {dist_proxima:.2f} unidades")
+        
+        print("\n" + "="*80)
+
+        #========================
+        #Estatísticas da rota
+        #========================
+        coords_unicas = set(coords)
+        if len(coords_unicas) < len(coords):
+            print(f"\n📌 Lojas Únicas: {len(coords_unicas)} (há {len(coords) - len(coords_unicas)} visitas repetidas)")
+            
+            # Mostra quais lojas são visitadas mais de uma vez
+            from collections import Counter
+            contador = Counter(coords)
+            repetidas = [(coord, count) for coord, count in contador.items() if count > 1]
+            
+            if repetidas:
+                print("\n🔄 Lojas com visitas múltiplas neste dia:")
+                for coord, count in repetidas:
+                    if env is not None:
+                        try:
+                            idx_loja = env.visit_coords.index(coord)
+                            print(f"   - Loja {idx_loja} {coord}: {count}x")
+                        except:
+                            print(f"   - {coord}: {count}x")
+                    else:
+                        print(f"   - {coord}: {count}x")
+        
+        print("="*80 + "\n")
+        
         try:
             coords_lista = []
-
             for i, coord in enumerate(coords):
                 if isinstance(coord, (tuple, list)) and len(coord) == 2:
                     x, y = coord
                     coords_lista.append([float(x), float(y)])
                 else:
-                    print(f"Coordenada {i} com formato inválido: {coord}")
+                    print(f"⚠️  Coordenada {i} com formato inválido: {coord}")
                     return
             
             coords_array = np.array(coords_lista, dtype=float)
-
-            if coords_array.shape[1] != 2:
-                print(f"Erro: Array com formato inesperado: {coords_array.shape}")
-                print(f"   Array: {coords_array}")
-                return
             
-            print(f"   Array shape: {coords_array.shape}")
-            print(f"   Range X: [{coords_array[:, 0].min():.2f}, {coords_array[:, 0].max():.2f}]")
-            print(f"   Range Y: [{coords_array[:, 1].min():.2f}, {coords_array[:, 1].max():.2f}]")
-
-        except Exception as e:
-            print(f"Erro ao converter coordenadas: {e}")
-            print(f"   Coords originais: {coords}")
-            return
+            if coords_array.shape[1] != 2:
+                print(f"❌ Erro: Array com formato inesperado: {coords_array.shape}")
+                return
         
+        except Exception as e:
+            print(f"❌ Erro ao converter coordenadas: {e}")
+            return
+
         # Ajusta o tamanho da figura
         plt.figure(figsize=(10, 8))
 
@@ -652,13 +717,62 @@ class RKO_Base():
                 idx_dono = donos_das_lojas[coords]
                 promotor_dono = promotores_bin[idx_dono]
 
-                # VALIDAÇÃO: Confirma que o dono está no cluster correto
+                #Validação: Confirma que o dono está no cluster correto
                 assert promotor_dono.cluster_id == cluster_da_visita, \
                     f"Erro: Promotor {idx_dono} (Cluster {promotor_dono.cluster_id}) " \
                     f"não deveria ter a loja no Cluster {cluster_da_visita}"
+
+                dias_com_essa_loja = set()
+
+                #Lista de coordenadas por dia
+                coords_por_dia = [
+                    promotor_dono.coords_segunda,   # 0
+                    promotor_dono.coords_terca,     # 1
+                    promotor_dono.coords_quarta,    # 2
+                    promotor_dono.coords_quinta,    # 3
+                    promotor_dono.coords_sexta,     # 4
+                    promotor_dono.coords_sabado     # 5
+                ]
+
+                #Verifica cada dia
+                for dia_idx, coords_dia in enumerate(coords_por_dia):
+                    if coords in coords_dia:
+                        dias_com_essa_loja.add(dia_idx)
                 
+                #Pega dias com capacidade disponível
                 dias_validos = promotor_dono.dias_possiveis(carga)
-                for dia in dias_validos:
+                
+                #Filtra: Remove dias onde a loja JÁ está
+                dias_disponiveis = [dia for dia in dias_validos 
+                                    if dia not in dias_com_essa_loja]
+                
+                #Se não há dias disponíveis sem repetir
+                if len(dias_disponiveis) == 0:
+                    #Tenta encontrar QUALQUER dia sem a loja (aceita hora extra)
+                    todos_dias = [0, 1, 2, 3, 4, 5]
+                    dias_sem_loja = [d for d in todos_dias if d not in dias_com_essa_loja]
+                    
+                    if len(dias_sem_loja) > 0:
+                        #Escolhe o dia com menor carga (minimiza hora extra)
+                        cargas_dias = [
+                            promotor_dono.carga_segunda,
+                            promotor_dono.carga_terca,
+                            promotor_dono.carga_quarta,
+                            promotor_dono.carga_quinta,
+                            promotor_dono.carga_sexta,
+                            promotor_dono.carga_sabado
+                        ]
+                        
+                        #Pega o dia menos carregado que NÃO tem a loja
+                        melhor_dia = min(dias_sem_loja, key=lambda d: cargas_dias[d])
+                        dias_disponiveis = [melhor_dia]
+                    else:
+                        #Loja já está em todos os 6 dias - impossível!
+                        #Não adiciona nada (força criação de novo promotor)
+                        dias_disponiveis = []
+                
+                #Adiciona dias disponíveis às opções
+                for dia in dias_disponiveis:
                     promotores_possiveis.append((idx_dono, dia))
 
             #Loja ainda não possui promotor
@@ -1033,8 +1147,8 @@ veloc_10_lojas = 10 #s/unidade
 if __name__ == "__main__":
 
     #=========================
-    n_lojas = 10
-    inst = 1
+    n_lojas = 20
+    inst = 21
     #=========================
 
     mapa_velocidades = {
