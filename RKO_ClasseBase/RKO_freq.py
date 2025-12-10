@@ -592,6 +592,35 @@ class RKO_Base():
             'alphaLNS': [0.95] # Fator de resfriamento para o LNS.
         }
 
+        self.SA_parameters: dict = {
+            'SAmax': [50],        # Número de iterações por temperatura
+            'alphaSA': [0.99],    # Taxa de resfriamento (cooling rate)
+            'betaMin': [0.05],    # Intensidade mínima de perturbação
+            'betaMax': [0.25],    # Intensidade máxima de perturbação
+            'T0': [10000]         # Temperatura inicial
+        }
+
+        # 2. VARIABLE NEIGHBORHOOD SEARCH (VNS)
+        self.VNS_parameters: dict = {
+            'kMax': [5],          # Número máximo de estruturas de vizinhança
+            'betaMin': [0.05]     # Intensidade mínima de shake
+        }
+
+        # 3. PARTICLE SWARM OPTIMIZATION (PSO)
+        self.PSO_parameters: dict = {
+            'PSize': [100],       # Tamanho do enxame (número de partículas)
+            'c1': [2.05],         # Coeficiente cognitivo (atração para melhor pessoal)
+            'c2': [2.05],         # Coeficiente social (atração para melhor global)
+            'w': [0.73]           # Peso de inércia (momentum)
+        }
+
+        # 4. GENETIC ALGORITHM (GA)
+        self.GA_parameters: dict = {
+            'sizePop': [100],     # Tamanho da população
+            'probCros': [0.98],   # Probabilidade de crossover
+            'probMut': [0.005]    # Probabilidade de mutação
+        }
+
     def decoder(self, keys):
         """
         Ex de Funcionamento (N=2 Lojas)
@@ -728,301 +757,177 @@ class RKO_Base():
         }
     
     def cost(self, solution, view_solution=False):
-        # 1. Separação da solução
-        order = solution["order"]
-        promotores_keys = solution["promotores_keys"]
-        visit_keys = solution["visit_keys"]
-        receita_total = solution["receita_total"]
-
-        #=======================================================
-        # 2. Inicialização com bin de promotores vazio
-        promotores_bin = [Promotores(self.velocidade)]
-
-        # Inicialização da atribuição loja -> promotor
-        donos_das_lojas = {}
-
-        #=======================================================
-        # 3. Processamento para cada visita
-
-        """
-        Aqui o algoritmo pega as visitas uma por uma.
-        Se a Loja 50 tem o menor valor em order_keys, ela é a primeira a entrar no loop.
-        O algoritmo tenta encaixar a Loja 50 no cenário vazio. Depois tenta encaixar a próxima, e assim por diante.
-        """
-
-        for idx, loja_id in enumerate(order):
-            # Recupera as informações das lojas da iteração
-            loja = int(loja_id)
-            carga = self.visit_durations[loja]
-            coords = self.visit_coords[loja]
-
-            # Chave aleatória do RKO (0.0 a 1.0) que vai decidir ONDE colocar a loja
-            key = promotores_keys[idx]
-
-            #=======================================================
-            # 4. Coleta de opções (COM RESTRIÇÃO DE 1 VISITA/DIA E DONO ÚNICO)
-            promotores_possiveis = []
             
-            # Loja JÁ possui promotor (TODAS as visitas devem ir para o mesmo promotor)
-            if coords in donos_das_lojas:
-                # Recupera qual o promotor DONO
-                idx_dono = donos_das_lojas[coords]
-                promotor_dono = promotores_bin[idx_dono]
+            # 1. Separação da solução (Igual)
+            order = solution["order"]
+            promotores_keys = solution["promotores_keys"]
+            visit_keys = solution["visit_keys"]
+            receita_total = solution["receita_total"]
 
-                # Verifica quais dias estão disponíveis
-                dias_validos = promotor_dono.dias_possiveis(carga)
-                
-                # Filtra apenas os dias onde a loja ainda NÃO foi visitada
-                for dia in dias_validos:
-                    if not promotor_dono.ja_visitou_no_dia(dia, coords):
-                        promotores_possiveis.append((idx_dono, dia))
-                
-                # CRÍTICO: Se o dono não tem mais dias disponíveis, 
-                # a solução é INVÁLIDA (penalidade será aplicada automaticamente)
-                # Não criamos novo promotor aqui para manter a restrição de dono único
-                
-                if len(promotores_possiveis) == 0:
-                    # Força alocar no melhor dia possível do dono, mesmo com hora extra
-                    # Escolhe o dia com menor carga atual
-                    cargas_dias_dono = [
-                        (0, promotor_dono.carga_segunda),
-                        (1, promotor_dono.carga_terca),
-                        (2, promotor_dono.carga_quarta),
-                        (3, promotor_dono.carga_quinta),
-                        (4, promotor_dono.carga_sexta),
-                        (5, promotor_dono.carga_sabado)
-                    ]
-                    
-                    # Filtra apenas dias que ainda não têm esta loja
-                    dias_sem_loja = [
-                        (d, c) for d, c in cargas_dias_dono 
-                        if not promotor_dono.ja_visitou_no_dia(d, coords)
-                    ]
-                    
-                    if len(dias_sem_loja) > 0:
-                        # Escolhe o dia com menor carga
-                        dia_escolhido = min(dias_sem_loja, key=lambda x: x[1])[0]
-                        promotores_possiveis.append((idx_dono, dia_escolhido))
-                    else:
-                        # Caso extremo: todos os 6 dias já têm a loja
-                        # Isso só acontece se freq > 6 (impossível no seu modelo)
-                        # Mas por segurança, coloca no primeiro dia
-                        promotores_possiveis.append((idx_dono, 0))
+            # 2. Inicialização (Igual)
+            promotores_bin = [Promotores(self.velocidade)]
+            donos_das_lojas = {}
 
-            # Loja AINDA NÃO possui promotor (primeira visita)
-            else:
-                # Opção A: Tenta alocar em promotor existente
+            # 3. Processamento (Lógica de construção igual)
+            for idx, loja_id in enumerate(order):
+                loja = int(loja_id)
+                carga = self.visit_durations[loja]
+                coords = self.visit_coords[loja]
+                key = promotores_keys[idx]
+                visit_key = visit_keys[idx]
+
+                # --- PASSO 1: VERIFICAÇÃO DE DONO ---
+                if coords in donos_das_lojas:
+                    idx_dono = donos_das_lojas[coords]
+                    promotor_dono = promotores_bin[idx_dono]
+                    
+                    dias_validos = promotor_dono.dias_possiveis(carga)
+                    idx_dia = int(visit_key * len(dias_validos))
+                    if idx_dia >= len(dias_validos): idx_dia = len(dias_validos) - 1
+                    
+                    promotor_dono.adicionar_loja(dias_validos[idx_dia], coords, carga, visit_key)
+                    continue 
+
+                # --- PASSO 2: SORTEIO (LOJA NOVA) ---
+                promotores_possiveis = []
                 for i in range(len(promotores_bin)):
                     if promotores_bin[i].total_lojas_unicas() < 8:
                         dias_validos = promotores_bin[i].dias_possiveis(carga)
                         for dia in dias_validos:
-                            if not promotores_bin[i].ja_visitou_no_dia(dia, coords):
-                                promotores_possiveis.append((i, dia))
-
-                # Opção B: Contratar novo promotor (SEMPRE disponível)
-                promotores_possiveis.append((-1, -1))
-
-            #=======================================================
-            # 5. Escolha e alocação baseada na Chave Aleatória
-            idx_escolhido = int(key * len(promotores_possiveis))
-            
-            if idx_escolhido >= len(promotores_possiveis):
-                idx_escolhido = len(promotores_possiveis) - 1
-
-            index_promotor_bin, dia_promotor_bin = promotores_possiveis[idx_escolhido]
-
-            #=======================================================
-            # 6. A Execução
-            
-            # Se o índice for de um novo promotor
-            if index_promotor_bin == -1:
-                new_promotor = Promotores(self.velocidade)
+                            promotores_possiveis.append((i, dia))
                 
-                # Decisão do dia inicial
-                dia_novo = int(visit_keys[idx] * 6)
-                if dia_novo >= 6: 
-                    dia_novo = 5
-                
-                # Adiciona a loja na rota do novo promotor
-                new_promotor.adicionar_loja(dia_novo, coords, carga, visit_keys[idx])
-                promotores_bin.append(new_promotor)
+                promotores_possiveis.append((-1, -1)) 
 
-                # REGISTRA o dono da loja (PRIMEIRA VEZ)
-                donos_das_lojas[coords] = len(promotores_bin) - 1
+                idx_escolhido = int(key * len(promotores_possiveis))
+                if idx_escolhido >= len(promotores_possiveis): idx_escolhido = len(promotores_possiveis) - 1
 
-            # Se o promotor já existe, adiciona a loja
-            else:
-                promotor = promotores_bin[index_promotor_bin]
-                promotor.adicionar_loja(dia_promotor_bin, coords, carga, visit_keys[idx])
+                index_promotor_bin, dia_promotor_bin = promotores_possiveis[idx_escolhido]
 
-                # Se for a primeira visita desta loja, registra o dono
-                if coords not in donos_das_lojas:
-                    donos_das_lojas[coords] = index_promotor_bin
-                    
-        #=======================================================
-        #7. Calculo da função objetivo
-        
-        # Definição de Pesos (Custos)
-        P_promotor = 750.0
-        P_hr_extra = 0.95            
-        P_dist = 0.06               # R$/m
-        P_hr_extra_abusiva = 10_000 # Custo Brutal
-
-        LIMITE_HE_SEMANAL = P_promotor / P_hr_extra 
-
-        # --- Primeira Parcela: Contratação ---
-        Custo_1 = P_promotor * len(promotores_bin)
-
-        # --- Segunda Parcela: Distância ---
-        Custo_dist_total = 0
-        for promotor in promotores_bin:
-            dist = promotor.dist_total()
-            Custo_dist_total += dist
-        
-        Custo_2 = Custo_dist_total * P_dist
-
-        # --- Terceira Parcela: Hora Extra ---
-        Custo_3 = 0 
-        total_minutos_he_frota = 0 # Dinheiro Real (R$)
-
-        for promotor in promotores_bin:
-            he_minutos_semanal_promotor = 0 
-            
-            for dia in range(6):
-                limite = 240 if dia == 5 else 480
-                tempo_total = promotor.tempo_total_dia(dia)
-
-                if tempo_total > limite:
-                    he_minutos_semanal_promotor += (tempo_total - limite)
-            
-            # Acumula as horas extras
-            total_minutos_he_frota += he_minutos_semanal_promotor
-
-            # Aplica a Lógica de Penalidade
-            if he_minutos_semanal_promotor <= LIMITE_HE_SEMANAL:
-                # Zona Segura: Penalidade Padrão
-                Custo_3 += (he_minutos_semanal_promotor) * P_hr_extra
-            else:
-                # Zona Abusiva: Penalidade Severa
-                excesso = he_minutos_semanal_promotor - LIMITE_HE_SEMANAL
-                
-                penalidade_normal = (LIMITE_HE_SEMANAL) * P_hr_extra
-                penalidade_abusiva = (excesso) * P_hr_extra_abusiva
-                
-                Custo_3 += penalidade_normal + penalidade_abusiva
-
-        # --- Quarta Parcela : Distribuição de Carga ----
-
-        # Definição de Pesos (Custos)
-        Tolerancia_dif = 10 * 60
-        P_balanc = 100_000
-
-        cargas_horarias = []
-
-        for p in promotores_bin:
-            cargas_horarias.append(p.carga_total())
-            
-            if len(cargas_horarias) > 1:
-                maior_carga = max(cargas_horarias)
-                menor_carga = min(cargas_horarias)
-                diferenca = maior_carga - menor_carga
-
-                if diferenca > Tolerancia_dif:
-                    # Só penaliza o EXCEDENTE da diferença
-                    # Ex: Se a diferença for 15h e a tolerância 10h, penaliza apenas 6h.
-                    excesso_desbalanceamento = diferenca - Tolerancia_dif
-                    Custo_4 = excesso_desbalanceamento * P_balanc
+                if index_promotor_bin == -1:
+                    new_promotor = Promotores(self.velocidade)
+                    dia_novo = int(visit_key * 6)
+                    if dia_novo >= 6: dia_novo = 5
+                    new_promotor.adicionar_loja(dia_novo, coords, carga, visit_key)
+                    promotores_bin.append(new_promotor)
+                    donos_das_lojas[coords] = len(promotores_bin) - 1
                 else:
-                    # Se a diferença for menor que 10h, o custo é zero
-                    Custo_4 = 0
+                    promotor = promotores_bin[index_promotor_bin]
+                    promotor.adicionar_loja(dia_promotor_bin, coords, carga, visit_key)
+                    donos_das_lojas[coords] = index_promotor_bin
 
-        # =======================================================
-        # Cálculo Final
-        fitness_total = Custo_1 + Custo_2 + Custo_3 + Custo_4
-        
-        # =======================================================
-        # Retorno Visualização
-        if view_solution:
-
-            qtd_promotores = len(promotores_bin)
-            
-            # ----- Cálculo custos operacionais -----
-            # A. Equipe
-            financeiro_equipe = qtd_promotores * P_promotor
-            
-            # B. Combustível
-            # Recalcula a distância total crua
-            dist_total_frota = sum([p.dist_total() for p in promotores_bin])
-            financeiro_dist = dist_total_frota * P_dist
-            
-            # C. Horas Extras
-            total_min_he_reais = 0
-            for p in promotores_bin:
-                for d in range(6):
-                    lim = 240 if d == 5 else 480
-                    t = p.tempo_total_dia(d)
-                    if t > lim:
-                        total_min_he_reais += (t - lim)
-            
-            financeiro_he = total_min_he_reais * P_hr_extra
-            
-            custo_operacional_total = financeiro_equipe + financeiro_dist + financeiro_he
-
-            # ----- Calculo da receita com base nas frequências -----
-
-            """
-            O cálulo da receita das duas fases é feito somando os valores correspondentes na 
-            matrix_prof[id_loja][freq] que é uma matriz LOJA X Profitability_freq sendo 
-            Profitability_freq as colunas dadas no .csv
-
-            Logo, a diferença é que na fase 1 ela encontra a profitability_freq correspondente usando as frequências dadas
-            e na fase 2 é usado as frequências encontradas pelo RKO.
-            """
-
-            #Acessa a matriz Loja x rentabilidade_freq e soma os valores
-            receita_planejada = 0
-
-            for id_loja in range(len(list_coords)):
-                freq_planejada = list_freq[id_loja]
-                if freq_planejada > 0:
-                    receita_planejada += matrix_prof[id_loja][freq_planejada - 1]
-
-            # ----- Impressão -----
-            print("\n" + "="*60)
-            print("             FINANCEIRO          ")
-            print("="*60)
-
-            print(f"RECEITAS:")
-            print(f"   - Frequências definidas (Fase 1):   R$ {receita_planejada:,.2f}")
-            print(f"   - Frequências otimizadas (Fase 2):  R$ {receita_total:,.2f}")
-
-            print("-" * 60)
-            print(f"CUSTOS OPERACIONAIS:")
-            print(f"   - Equipe ({qtd_promotores} pessoas):         R$ {financeiro_equipe:,.2f}")
-            print(f"   - Combustível ({dist_total_frota:.0f} un):       R$ {financeiro_dist:,.2f}")
-            print(f"   - Horas Extras ({total_min_he_reais:.0f} min):     R$ {financeiro_he:,.2f}")
-            print(f"   ---------------------------------------------")
-            print(f"   TOTAL CUSTOS:                 R$ {custo_operacional_total:,.2f}")
-            
-            print("-" * 60)
-            print(f"LUCRO (FASE 2):                  R$ {fitness_total - receita_total:,.2f}")
-
-            return promotores_bin
             # =======================================================
-
-        # Log em Tempo Real (Console)
-        if fitness_total < self.melhor_fitness_encontrado:
-            self.melhor_fitness_encontrado = fitness_total
+            # 6. CÁLCULO DA FUNÇÃO OBJETIVO (FITNESS)
+            # =======================================================
             
-            qtd_promotores = len(promotores_bin)
+            P_promotor = 750.0
+            P_hr_extra = 0.3408 
+            P_dist = 0.06 
+            P_hr_extra_abusiva = 100_000
+            LIMITE_HE_SEMANAL = 1200
 
-            print(f" >>> [NOVO RECORD] Promotores: {qtd_promotores} | HE Total: {total_minutos_he_frota:.0f} min | (Lucro: R$ {fitness_total - receita_total:.2f})")
+            # Custo 1 (Contratação)
+            Custo_1 = P_promotor * len(promotores_bin)
 
-        return fitness_total - receita_total
+            # Custo 2 (Distância)
+            dist_total = sum([p.dist_total() for p in promotores_bin])
+            Custo_2 = dist_total * P_dist
+
+            # Custo 3 (Hora Extra + Penalidade)
+            Custo_3 = 0 
+            total_minutos_he_frota = 0 
+            penalidade_he_total = 0
+
+            for promotor in promotores_bin:
+                he_promotor = 0 
+                for dia in range(6):
+                    lim = 240 if dia == 5 else 480
+                    t = promotor.tempo_total_dia(dia)
+                    if t > lim: he_promotor += (t - lim)
+                
+                total_minutos_he_frota += he_promotor
+                Custo_3 += he_promotor * P_hr_extra
+
+                if he_promotor > LIMITE_HE_SEMANAL:
+                    excesso = he_promotor - LIMITE_HE_SEMANAL
+                    penalidade_he_total += excesso * P_hr_extra_abusiva
+
+            # Custo 4 e 5 (Balanceamento)
+            Tolerancia_dif = 9 * 60
+            P_balanc = 100_000
+            P_b = 5
+            
+            Custo_5 = 0 
+            penalidade_desbalanc = 0
+
+            cargas = [p.carga_total() for p in promotores_bin]
+            if len(cargas) > 1:
+                diff = max(cargas) - min(cargas)
+                Custo_5 = diff * P_b
+                
+                if diff > Tolerancia_dif:
+                    penalidade_desbalanc = (diff - Tolerancia_dif) * P_balanc
+
+            # Definição Final dos Valores
+            valor_objetivo_pdf = (Custo_1 + Custo_2 + Custo_3 + Custo_5) - receita_total
+            fitness_total = valor_objetivo_pdf + penalidade_he_total + penalidade_desbalanc
+
+            # =======================================================
+            # RETORNO E VISUALIZAÇÃO
+            # =======================================================
+            if view_solution:
+                # Precisamos garantir que as variáveis existam no escopo do print
+                # Como já calculamos tudo acima (Custo_1, Custo_2, etc), podemos reutilizar
+                
+                receita_planejada = 0
+                if hasattr(self, 'frequencias_iniciais'):
+                    for id_loja, freq_inicial in enumerate(self.frequencias_iniciais):
+                        if freq_inicial > 0:
+                            receita_planejada += self.matrix_prof[id_loja][freq_inicial - 1]
+                
+                print("\n" + "="*60)
+                print("            DEMONSTRATIVO FINANCEIRO            ")
+                print("="*60)
+
+                print(f"RECEITAS:")
+                print(f"   - Cenário Base (Fase 1):           R$ {receita_planejada:,.2f}")
+                print(f"   - Otimizado (Fase 2):              R$ {receita_total:,.2f}")
+                
+                diff_rec = receita_total - receita_planejada
+                sinal = "+" if diff_rec >= 0 else ""
+                print(f"   > Variação de Receita:             {sinal}R$ {diff_rec:,.2f}")
+
+                print("-" * 60)
+                print(f"CUSTOS OPERACIONAIS (Reais):")
+                print(f"   - Equipe ({len(promotores_bin)} pessoas):          R$ {Custo_1:,.2f}")
+                print(f"   - Combustível ({dist_total:.0f} un):       R$ {Custo_2:,.2f}")
+                print(f"   - Horas Extras ({total_minutos_he_frota:.0f} min):     R$ {Custo_3:,.2f}")
+                print(f"   - Penalidade Desbalanceamento (PDF): R$ {Custo_5:,.2f}")
+                
+                custo_op_total = Custo_1 + Custo_2 + Custo_3 # Sem o custo abstrato de balanceamento para o bolso
+                
+                print("-" * 60)
+                # O valor da função objetivo do PDF (Matemático)
+                print(f"VALOR DA FUNÇÃO OBJETIVO (PDF):       {valor_objetivo_pdf:.2f}")
+                
+                # O lucro financeiro real (Bolso)
+                lucro_liquido = receita_total - custo_op_total
+                print(f"LUCRO LÍQUIDO FINANCEIRO:             R$ {lucro_liquido:,.2f}")
+
+                return promotores_bin
+
+            # Log em Tempo Real
+            if fitness_total < self.melhor_fitness_encontrado:
+                self.melhor_fitness_encontrado = fitness_total
+                qtd_promotores = len(promotores_bin)
+                # Exibe o valor da função objetivo "pura" (PDF) para acompanhamento
+                print(f" >>> [NOVO RECORD] Promotores: {qtd_promotores} | Obj(PDF): {valor_objetivo_pdf:.2f}")
+
+            return fitness_total
         
 
 veloc_100_lojas = 18 #s/unidade
 veloc_50_lojas = 15 #s/unidade
+veloc_30_lojas = 13 #s/unidade
 veloc_20_lojas = 12 #s/unidade
 veloc_10_lojas = 10 #s/unidade
 
@@ -1051,7 +956,14 @@ if __name__ == "__main__":
     env = RKO_Base(60, velocidade_atual, n_lojas, inst) 
     solver = RKO(env, print_best=True)
     
-    final_cost, final_solution, time_to_best = solver.solve(60, brkga=1, ils=1, lns=1)
+    final_cost, final_solution, time_to_best = solver.solve(1200,     # 20 minutos
+                                                            brkga=20,
+                                                            ils=15,
+                                                            lns=15,
+                                                            sa=10,
+                                                            vns=10,
+                                                            pso=8,
+                                                            ga=8)
     
     dados_decodificados = env.decoder(final_solution)
     solucao_final = env.cost(dados_decodificados, view_solution=True)  

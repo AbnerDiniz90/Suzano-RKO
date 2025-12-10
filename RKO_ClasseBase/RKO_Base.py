@@ -66,6 +66,21 @@ class Promotores:
         
         return trajeto_total
     
+    def ja_visitou_no_dia(self, dia, coord_loja):
+        """
+        Verifica se o promotor já tem uma visita agendada para esta loja neste dia.
+        Retorna True se já visitou.
+        """
+        if dia == 0: lista_dia = self.coords_segunda
+        elif dia == 1: lista_dia = self.coords_terca
+        elif dia == 2: lista_dia = self.coords_quarta
+        elif dia == 3: lista_dia = self.coords_quinta
+        elif dia == 4: lista_dia = self.coords_sexta
+        elif dia == 5: lista_dia = self.coords_sabado
+        else: return False
+
+        return coord_loja in lista_dia
+    
     def total_lojas_unicas(self):
         """
         Conta quantas lojas ÚNICAS este promotor atende na semana.
@@ -377,6 +392,84 @@ class Promotores:
             distancia += np.linalg.norm(np.array(cidade_atual) - np.array(proxima_cidade))
 
         return distancia
+    
+def plotar_rotas_unificadas(solucao, dia_idx):
+    """
+    Plota as rotas com correção para números sobrepostos.
+    """
+    
+    mapa_dias = {
+        0: ('coords_segunda', 'Segunda-feira'),
+        1: ('coords_terca', 'Terça-feira'),
+        2: ('coords_quarta', 'Quarta-feira'),
+        3: ('coords_quinta', 'Quinta-feira'),
+        4: ('coords_sexta', 'Sexta-feira'),
+        5: ('coords_sabado', 'Sábado')
+    }
+    
+    if dia_idx not in mapa_dias:
+        print("Dia inválido.")
+        return
+
+    attr_name, nome_dia = mapa_dias[dia_idx]
+    
+    plt.figure(figsize=(12, 10))
+    plt.title(f"Visão Geral da Frota - {nome_dia}", fontsize=16)
+    plt.xlabel("Coordenada X")
+    plt.ylabel("Coordenada Y")
+    plt.grid(True, linestyle='--', alpha=0.6)
+
+    cmap = plt.get_cmap('tab20')
+    promotores_ativos = 0
+
+    # Dicionário para controlar sobreposição de texto
+    # Chave: (x, y) -> Valor: Quantidade de vezes que plotamos ali
+    posicoes_ocupadas = {}
+
+    for i, promotor in enumerate(solucao):
+        coords = getattr(promotor, attr_name)
+        
+        if not coords:
+            continue 
+        
+        promotores_ativos += 1
+        
+        xs = [c[0] for c in coords]
+        ys = [c[1] for c in coords]
+        
+        cor = cmap(i % 20)
+        
+        # Plota a linha (Rota)
+        plt.plot(xs, ys, linestyle='-', color=cor, alpha=0.6, label=f'Promotor {i}')
+        
+        # Plota os pontos (Lojas) - Todos pretos conforme você pediu
+        plt.scatter(xs, ys, color='black', zorder=10, s=30)
+
+        # Adiciona os números com deslocamento inteligente
+        for ordem, (x, y) in enumerate(coords):
+            coord_chave = (x, y)
+            
+            # Verifica quantas vezes já escrevemos nessa coordenada
+            deslocamento = posicoes_ocupadas.get(coord_chave, 0)
+            posicoes_ocupadas[coord_chave] = deslocamento + 1
+            
+            # Calcula um offset baseado na quantidade de repetições
+            # Vai empilhando os números verticalmente
+            offset_y = 1.5 + (deslocamento * 3.0) 
+            
+            texto = str(ordem + 1)
+            
+            plt.text(x + 1.5, y + offset_y, texto, 
+                     color=cor, fontsize=10, fontweight='bold', zorder=15)
+
+    if promotores_ativos == 0:
+        print(f"Nenhum promotor tem visitas agendadas para {nome_dia}.")
+        plt.close()
+        return
+
+    plt.legend(loc='best', title="Equipe")
+    plt.tight_layout()
+    plt.show()
 
 def get_instancia_csv(num_lojas: int, num_instancia: int) -> pd.DataFrame:
     """
@@ -415,9 +508,10 @@ def get_instancia_csv(num_lojas: int, num_instancia: int) -> pd.DataFrame:
     list_frequency = df_instancia['initial_frequency'].tolist()
 
     cols_lucro = [f'profitability_freq_{i}' for i in range(1, 7)]
-    matrix_profitability = df_instancia[cols_lucro].values
+    #matrix_profitability = df_instancia[cols_lucro].values
+    
 
-    return list_coordinates, list_visit_duration, list_frequency, matrix_profitability
+    return list_coordinates, list_visit_duration, list_frequency
 
 class RKO_Base():
     """
@@ -437,7 +531,7 @@ class RKO_Base():
         self.velocidade = velocidade    # Velocidade de deslocamento
         self.max_time = tempo           # Tempo máximo de execução para cada metaheurística (em segundos)
         self.instance_name = "Suzano_RKO_Problem"
-        list_coords, list_visits, list_frequency, _ = get_instancia_csv(lojas, inst) #Carregamento de dados da instância especificada
+        list_coords, list_visits, list_frequency = get_instancia_csv(lojas, inst) #Carregamento de dados da instância especificada
 
         self.dict_best: dict = {}
 
@@ -579,126 +673,116 @@ class RKO_Base():
         """
 
         for idx, loja in enumerate(order):
-            #Recupera as informações das lojas da iteração
+            # Recupera as informações das lojas da iteração
             loja = int(loja)
             carga = self.total_visit_duration[loja]
             coords = self.total_coords[loja]
 
             # Chave aleatória do RKO (0.0 a 1.0) que vai decidir ONDE colocar a loja
             key = promotores_keys[idx]
-            #=======================================================
 
-            # 4. Coleta de opções
+            #=======================================================
+            # 4. Coleta de opções (COM RESTRIÇÃO DE 1 VISITA/DIA)
             promotores_possiveis = []
             
-            #Loja já possui promotor
+            # Loja JÁ possui promotor (todas as visitas devem ir para o MESMO promotor)
             if coords in donos_das_lojas:
-                #Recupera qual o promotor
+                # Recupera qual o promotor DONO
                 idx_dono = donos_das_lojas[coords]
                 promotor_dono = promotores_bin[idx_dono]
 
-                #Verifica quais seus dias disponíveis
+                # Verifica quais dias estão disponíveis
                 dias_validos = promotor_dono.dias_possiveis(carga)
+                
+                # Filtra apenas os dias onde a loja ainda NÃO foi visitada
                 for dia in dias_validos:
-                    promotores_possiveis.append((idx_dono, dia))
+                    if not promotor_dono.ja_visitou_no_dia(dia, coords):
+                        promotores_possiveis.append((idx_dono, dia))
+                
+                # CRÍTICO: Se o dono não tem mais dias disponíveis sem visita,
+                # força alocação no melhor dia possível
+                if len(promotores_possiveis) == 0:
+                    # Escolhe o dia com menor carga que ainda não tem esta loja
+                    cargas_dias_dono = [
+                        (0, promotor_dono.carga_segunda),
+                        (1, promotor_dono.carga_terca),
+                        (2, promotor_dono.carga_quarta),
+                        (3, promotor_dono.carga_quinta),
+                        (4, promotor_dono.carga_sexta),
+                        (5, promotor_dono.carga_sabado)
+                    ]
+                    
+                    # Filtra apenas dias que ainda não têm esta loja
+                    dias_sem_loja = [
+                        (d, c) for d, c in cargas_dias_dono 
+                        if not promotor_dono.ja_visitou_no_dia(d, coords)
+                    ]
+                    
+                    if len(dias_sem_loja) > 0:
+                        # Escolhe o dia com menor carga
+                        dia_escolhido = min(dias_sem_loja, key=lambda x: x[1])[0]
+                        promotores_possiveis.append((idx_dono, dia_escolhido))
+                    else:
+                        # Caso extremo: já visitou em TODOS os 6 dias
+                        # Isso só acontece se freq > 6 (improvável)
+                        # Por segurança, coloca no dia com menor carga total
+                        dia_escolhido = min(cargas_dias_dono, key=lambda x: x[1])[0]
+                        promotores_possiveis.append((idx_dono, dia_escolhido))
 
-            #Loja ainda não possui promotor
+            # Loja AINDA NÃO possui promotor (primeira visita desta loja)
             else:
-                """
-                O loop abaixo verifica para cada promotor existente se há espaço.
-                Por conta de ser uma restrição não rígida, a resposta é sempre "Sim" (mesmo que gere Hora Extra).
-                """
-
-                #Opção A: Tenta alocar loja num promotor já existente
+                # Opção A: Tenta alocar em promotor existente
                 for i in range(len(promotores_bin)):
-                    #Sempre haverá dias disponíveis, contudo ou será com hr extra ou será tempo livre de um novo promotor
                     if promotores_bin[i].total_lojas_unicas() < 8:
                         dias_validos = promotores_bin[i].dias_possiveis(carga)
                         for dia in dias_validos:
-                            promotores_possiveis.append((i, dia))
+                            # Verifica se o promotor já não visitou esta loja neste dia
+                            if not promotores_bin[i].ja_visitou_no_dia(dia, coords):
+                                promotores_possiveis.append((i, dia))
 
-                #Opção B: Contratar novo promotor
-                promotores_possiveis.append((-1, -1)) 
+                # Opção B: Contratar novo promotor (SEMPRE disponível)
+                promotores_possiveis.append((-1, -1))
 
-                """
-                Ex.:
-
-                O código pergunta: "Quais são as jogadas possíveis agora?"
-
-                Imagine que já existem 2 promotores (P0 e P1):
-
-                -P0 diz: "Posso atender na Segunda ou na Terça". => Adiciona (0, 0) e (0, 1) na lista.
-                -P1 diz: "Estou lotado, mas posso na Sexta com hora extra". => Adiciona (1, 4) na lista.
-                -RH diz: "Sempre podemos contratar alguém novo". => Adiciona (-1, -1).
-                
-                A lista promotores_possiveis vira um Menu de Decisão: Index 0: (P0, 0) | Index 1: (P0, 1) | Index 2: (P1, 4) | Index 3: (-1, -1)
-                """
             #=======================================================
-
-            # 5. Escolha e alocação baseada na Chave Aleatória (O Sorteio)
+            # 5. Escolha e alocação baseada na Chave Aleatória
             idx_escolhido = int(key * len(promotores_possiveis))
-
-            """
-            Aqui usa-se a chave aleatória (key) (um número entre 0.00 e 0.99) para escolher um item do menu.
-            
-            Matemáticamente: Se a lista tem 4 opções e o key é 0.80: 
-                0.80 . 4 = 3.2
-                int(3.2) = 3
-                
-            O algoritmo escolhe o item de índice 3 (Criar Novo Promotor).
-            O Aprendizado: Se escolher o índice 3 for uma decisão ruim (custar muito caro), 
-            o RKO vai evoluir para ter um key menor (ex: 0.20) nas próximas gerações, forçando a escolha do índice 0 ou 1 (Promotores existentes).
-            """
-            #=======================================================
-
-            # 6. A Execução
-
-            """
-            Proteção contra erros de arredondamento:
-
-            -Se a lista tem tamanho 5 e a chave for muito próxima de 1.0, a conta int(1.0 * 5) dá 5.
-
-            -Mas os índices de uma lista de tamanho 5 são 0, 1, 2, 3, 4. O índice 5 daria erro (IndexError).
-
-            -Essa linha garante que, se a matemática "passar do ponto", nós pegamos o último item da lista.
-            """
             
             if idx_escolhido >= len(promotores_possiveis):
                 idx_escolhido = len(promotores_possiveis) - 1
 
-            """
-            Aqui pegamos a opção que ganhou o sorteio: 
-            -Se a tupla for (-1, -1), as variáveis recebem -1 (Sinal de Novo Promotor).
-            -Se a tupla for (0, 2), significa "Promotor 0, Dia 2 (Quarta)".
-            """
             index_promotor_bin, dia_promotor_bin = promotores_possiveis[idx_escolhido]
 
-            #Se o índice for de um novo promotor, adiciona-se um novo na lista de promotores
+            #=======================================================
+            # 6. A Execução
+            
+            # Se o índice for de um novo promotor
             if index_promotor_bin == -1:
                 new_promotor = Promotores(self.velocidade)
                 
-                #Decisão do dia inicial
+                # Decisão do dia inicial
                 dia_novo = int(visit_keys[idx] * 6)
-                if dia_novo >= 6: dia_novo = 5
+                if dia_novo >= 6: 
+                    dia_novo = 5
                 
-                #Decide onde vai adicionar a loja na rota do promotor
+                # Adiciona a loja na rota do novo promotor
                 new_promotor.adicionar_loja(dia_novo, coords, carga, visit_keys[idx])
                 promotores_bin.append(new_promotor)
 
-                #Registrando qual loja pertence a qual promotor
+                # REGISTRA o dono da loja (PRIMEIRA VEZ)
                 donos_das_lojas[coords] = len(promotores_bin) - 1
 
-            #Se o promotor já existe, adiciona-se a loja na sua rota com base na visit_keys    
+            # Se o promotor já existe, adiciona a loja
             else:
                 promotor = promotores_bin[index_promotor_bin]
                 promotor.adicionar_loja(dia_promotor_bin, coords, carga, visit_keys[idx])
 
-                #Registrando qual loja pertence a qual promotor
-                donos_das_lojas[coords] = index_promotor_bin
+                # Se for a primeira visita desta loja, registra o dono
+                if coords not in donos_das_lojas:
+                    donos_das_lojas[coords] = index_promotor_bin
                 
         #=======================================================
 
-        #6. Calculo da função objetivo
+        #7. Calculo da função objetivo
 
         """
         Função objetivo utilizada tenta maximizar: F0 = len(promotores_bin) + (menor_carga / 1000000000000)
@@ -745,10 +829,10 @@ class RKO_Base():
         #=======================================================
         
         # --- Definição de Pesos (Custos) ---
-        P_promotor = 750.0
-        P_hr_extra = 0.3408 # (20.45 / 60)
-        P_dist = 0.06 # R$/m
-        P_hr_extra_abusiva = 10_000 # Custo Brutal
+        P_promotor = 750.0          # 
+        P_hr_extra = 0.9            # (20.45 / 60)
+        P_dist = 0.06               # R$/m
+        P_hr_extra_abusiva = 100_000 # Custo Brutal
 
         """
         P_promotor = 750.0
@@ -892,26 +976,28 @@ class RKO_Base():
 
 veloc_100_lojas = 18 #s/unidade
 veloc_50_lojas = 15 #s/unidade
+veloc_30_lojas = 13 #s/unidade
 veloc_20_lojas = 12 #s/unidade
 veloc_10_lojas = 10 #s/unidade
 
 if __name__ == "__main__":
 
     #=========================
-    n_lojas = 10
+    n_lojas = 30
     inst = 1
     #=========================
 
     mapa_velocidades = {
         10: veloc_10_lojas,
         20: veloc_20_lojas,
+        30: veloc_30_lojas,
         50: veloc_50_lojas,
         100: veloc_100_lojas
     }
 
     velocidade_atual = mapa_velocidades.get(n_lojas)
 
-    list_coords, list_visits, list_frequency, matriz = get_instancia_csv(n_lojas, inst)
+    list_coords, list_visits, list_frequency = get_instancia_csv(n_lojas, inst)
     
     env = RKO_Base(60, velocidade_atual, n_lojas, inst) #Alterar Velocidade da instância
 
@@ -919,26 +1005,6 @@ if __name__ == "__main__":
     final_cost, final_solution, time_to_best = solver.solve(60, brkga=1, ils=1, lns=1)
     
     solucao_final = env.cost(env.decoder(final_solution), view_solution=True) 
-
-    receita_bruta_fase1 = 0
-
-    for id_loja in range(len(list_coords)):
-        # 1. Pega a frequência fixa do arquivo
-        freq_inicial = list_frequency[id_loja]
-        
-        # 2. Busca o valor na matriz de lucros
-        # A matriz é base 0 (índice 0 = freq 1), então subtraímos 1 da frequência
-        if freq_inicial > 0:
-            lucro_loja = matriz[id_loja][freq_inicial - 1]
-        else:
-            lucro_loja = 0.0
-            
-        # 3. Acumula
-        receita_bruta_fase1 += lucro_loja
-
-    print("-" * 40)
-    print(f"RECEITA BRUTA TOTAL (Fase 1): R$ {receita_bruta_fase1:,.2f}")
-    print("="*50 + "\n")
 
     # --- RELATÓRIO DETALHADO E VERIFICAÇÃO ---
     print("\n" + "="*40)
@@ -1039,18 +1105,24 @@ if __name__ == "__main__":
     #========================================
 
     # Loop de Plotagem
+    # Loop de Plotagem
+    print("\n--- Visualização de Rotas ---")
     while True:
         try:
-            entrada = input("Digite o número do promotor para plotar a rota (ou -1 para sair): ")
-            promotor = int(entrada)
-            if promotor == -1:
+            print("\nDigite o dia para visualizar a rota de TODOS os promotores:")
+            entrada = input("(0=Seg, 1=Ter, 2=Qua, 3=Qui, 4=Sex, 5=Sab, -1=Sair): ")
+            
+            dia = int(entrada)
+            
+            if dia == -1:
+                print("Encerrando...")
                 break
             
-            dia = int(input("Digite o dia (0=Seg, 1=Ter, 2=Qua, 3=Qui, 4=Sex, 5=Sab): "))
-            
-            if 0 <= promotor < len(solucao_final):
-                solucao_final[promotor].plot_rota(dia)
+            if 0 <= dia <= 5:
+                # Chama a função nova passando a lista completa de soluções
+                plotar_rotas_unificadas(solucao_final, dia)
             else:
-                print("Promotor inválido.")
+                print("Dia inválido. Digite entre 0 e 5.")
+                
         except ValueError:
-            print("Entrada inválida.")
+            print("Entrada inválida. Digite um número.")
