@@ -11,9 +11,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import matplotlib.pyplot as plt
 from collections import Counter
+from clusters import ClusterizadorLojas
 
 class Promotores:
-    def __init__(self, velocidade):
+    def __init__(self, velocidade, cluster_id=None):
         """
         Definição inicial de um promotor e sua agenda inicial.
 
@@ -25,6 +26,9 @@ class Promotores:
         self.nome_promotor = 'teste'
         self.nome_rota = 'teste'
         self.velocidade = velocidade
+
+        self.cluster_id = cluster_id
+        self.cluster_designado = cluster_id is not None
 
         self.coords_segunda = []
         self.carga_segunda = 0
@@ -558,6 +562,18 @@ class RKO_Base():
         self.total_visit_duration = []
         self.total_coords = []
 
+        #Definição do clusterizador de lojas
+        self.clusterizador = ClusterizadorLojas(
+            coords=self.visit_coords,
+            frequencias=self.initial_freq,  # Usa as frequências iniciais
+            metodo='kmeans',
+            num_clusters='auto',
+            ponderar_por_frequencia=False
+        )
+    
+        # Executa clusterização
+        self.cluster_labels = self.clusterizador.clusterizar()
+
         """
         # Transforma dados de lojas únicas em dados de visitas individuais. (NÃO USADO MAIS)
         for i in range(len(self.frequencias)):
@@ -769,9 +785,16 @@ class RKO_Base():
         visit_keys = solution["visit_keys"]
         receita_total = solution["receita_total"]
 
+        # Inicialização dos clusters
+
+        self.cluster_por_loja = {}
+        for i in range(self.num_lojas):
+            cluster_id = self.clusterizador.get_cluster_da_loja(i)
+            self.cluster_por_loja[i] = cluster_id
+
         #=======================================================
         # 2. Inicialização com bin de promotores vazio
-        promotores_bin = [Promotores(self.velocidade)]
+        promotores_bin = []
 
         # Inicialização da atribuição loja -> promotor
         donos_das_lojas = {}
@@ -794,6 +817,8 @@ class RKO_Base():
             # Chave aleatória do RKO (0.0 a 1.0) que vai decidir ONDE colocar a loja
             key = promotores_keys[idx]
 
+            #Identificar cluster
+            cluster_da_loja = self.cluster_por_loja[loja]
             #=======================================================
             # 4. Coleta de opções (COM RESTRIÇÃO DE 1 VISITA/DIA E DONO ÚNICO)
             promotores_possiveis = []
@@ -803,6 +828,11 @@ class RKO_Base():
                 # Recupera qual o promotor DONO
                 idx_dono = donos_das_lojas[coords]
                 promotor_dono = promotores_bin[idx_dono]
+
+                #Verifica se o promotor dono pertence ao cluster correto
+                assert promotor_dono.cluster_id == cluster_da_loja, \
+                    f"Erro: Promotor {idx_dono} (Cluster {promotor_dono.cluster_id}) " \
+                    f"não deveria ter a loja {loja} no Cluster {cluster_da_loja}"
 
                 # Verifica quais dias estão disponíveis
                 dias_validos = promotor_dono.dias_possiveis(carga)
@@ -846,15 +876,23 @@ class RKO_Base():
 
             # Loja AINDA NÃO possui promotor (primeira visita)
             else:
-                # Opção A: Tenta alocar em promotor existente
+                # Adicionar um novo promotor respeitando o cluster
                 for i in range(len(promotores_bin)):
-                    if promotores_bin[i].total_lojas_unicas() < 8:
-                        dias_validos = promotores_bin[i].dias_possiveis(carga)
-                        for dia in dias_validos:
-                            if not promotores_bin[i].ja_visitou_no_dia(dia, coords):
-                                promotores_possiveis.append((i, dia))
+                    promotor = promotores_bin[i]
+                    
+                    # REGRA: Promotor só pega loja do seu cluster
+                    if promotor.cluster_id == cluster_da_loja:
+                        if promotor.total_lojas_unicas() < 8:
+                            dias_validos = promotor.dias_possiveis(carga)
+                            for dia in dias_validos:
+                                if not promotor.ja_visitou_no_dia(dia, coords):
+                                    promotores_possiveis.append((i, dia))
 
                 # Opção B: Contratar novo promotor (SEMPRE disponível)
+                promotores_possiveis.append((-1, -1))
+            
+            # Proteção
+            if len(promotores_possiveis) == 0:
                 promotores_possiveis.append((-1, -1))
 
             #=======================================================
@@ -871,7 +909,7 @@ class RKO_Base():
             
             # Se o índice for de um novo promotor
             if index_promotor_bin == -1:
-                new_promotor = Promotores(self.velocidade)
+                new_promotor = Promotores(self.velocidade, cluster_id=cluster_da_loja)
                 
                 # Decisão do dia inicial
                 dia_novo = int(visit_keys[idx] * 6)
@@ -901,7 +939,7 @@ class RKO_Base():
         P_promotor = 750.0
         P_hr_extra = 0.95            
         P_dist = 0.06               # R$/m
-        P_hr_extra_abusiva = 10_000 # Custo Brutal
+        P_hr_extra_abusiva = 50_000 # Custo Brutal
 
         LIMITE_HE_SEMANAL = P_promotor / P_hr_extra 
 
@@ -949,8 +987,8 @@ class RKO_Base():
         # --- Quarta Parcela : Distribuição de Carga ----
 
         # Definição de Pesos (Custos)
-        Tolerancia_dif = 10 * 60
-        P_balanc = 100_000
+        Tolerancia_dif = 3 * 60
+        P_balanc = 1_000_000
 
         cargas_horarias = []
 
@@ -970,10 +1008,24 @@ class RKO_Base():
                 else:
                     # Se a diferença for menor que 10h, o custo é zero
                     Custo_4 = 0
+        # =======================================================
+        # Penalidade de ociosidade
+
+        # --- Quinta Parcela: Penalidade de Ociosidade Individual ---
+        P_OCIOSIDADE = 50_000  # Custo por hora ociosa
+        CARGA_MINIMA_DESEJADA = 18 * 60  # 18 horas semanais
+
+        Penalidade_Ociosidade = 0
+        for promotor in promotores_bin:
+            carga_promotor = promotor.carga_total()
+            
+            if carga_promotor < CARGA_MINIMA_DESEJADA:
+                deficit = CARGA_MINIMA_DESEJADA - carga_promotor
+                Penalidade_Ociosidade += deficit * P_OCIOSIDADE
 
         # =======================================================
         # Cálculo Final
-        fitness_total = Custo_1 + Custo_2 + Custo_3 + Custo_4
+        fitness_total = Custo_1 + Custo_2 + Custo_3 + Custo_4 + Penalidade_Ociosidade
         
         # =======================================================
         # Retorno Visualização
@@ -1097,6 +1149,21 @@ if __name__ == "__main__":
     
     dados_decodificados = env.decoder(final_solution)
     solucao_final = env.cost(dados_decodificados, view_solution=True)  
+
+    # ========== NOVO: VERIFICAÇÃO DE CLUSTERS ==========
+    print("\n" + "="*60)
+    print("          VERIFICAÇÃO DE CLUSTERS          ")
+    print("="*60)
+    
+    env.clusterizador._imprimir_estatisticas()
+    
+    # Verifica exclusividade
+    env.clusterizador.validar_exclusividade(solucao_final, env.visit_coords)
+    
+    # Opcional: Plotar clusters
+    resposta = input("\nDeseja visualizar os clusters? (s/n): ")
+    if resposta.lower() == 's':
+        env.clusterizador.plot_clusters()
 
     # =======================================================
     # Impressão das frequências encontradas pelo RKO
