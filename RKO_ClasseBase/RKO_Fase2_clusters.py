@@ -497,7 +497,7 @@ def get_instancia_csv(num_lojas: int, num_instancia: int) -> pd.DataFrame:
     dir_root = os.path.dirname(dir_atual)
     base_path = os.path.join(dir_root, "Instancias_Unifesp_Suzano")
 
-    if num_lojas <= 0 or num_lojas > 100 or num_instancia <= 0 or num_instancia > 100:
+    if num_lojas <= 0 or num_lojas > 5000 or num_instancia <= 0 or num_instancia > 100:
         raise ValueError("Número de lojas ou número da instância não compatível.")
 
     pasta_tamanho = f"{num_lojas}_stores"
@@ -1107,7 +1107,7 @@ class RKO_Base():
 
         return fitness_total - receita_total
         
-
+veloc_5000_lojas = 20 #s/unidade
 veloc_100_lojas = 18 #s/unidade
 veloc_50_lojas = 15 #s/unidade
 veloc_20_lojas = 12 #s/unidade
@@ -1116,7 +1116,7 @@ veloc_10_lojas = 10 #s/unidade
 # =========================
 #Definição do número de lojas e instância utilizada
 
-n_lojas = 50
+n_lojas = 5000
 inst = 1
 # =========================
 
@@ -1127,7 +1127,8 @@ if __name__ == "__main__":
         10: veloc_10_lojas,
         20: veloc_20_lojas,
         50: veloc_50_lojas,
-        100: veloc_100_lojas
+        100: veloc_100_lojas,
+        5000: veloc_5000_lojas
     }
 
     velocidade_atual = mapa_velocidades.get(n_lojas)
