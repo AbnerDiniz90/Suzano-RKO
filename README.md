@@ -108,30 +108,6 @@ A solução utiliza o framework **RKO (Random-Key Optimizer)**, que codifica a s
 * 📍 **K-Means Clustering** (Scikit-Learn) para regionalização.
 
 
-
-## 📊 Visualização dos Resultados
-
-
-
-### Comparativo Visual
-
-O impacto da clusterização na organização das rotas:
-
-
-
-| Sem Clusterização (`RKO_freq.py`) | Com Clusterização (`RKO_freq_clusters.py`) |
-
-|:---:|:---:|
-
-|  |  |
-
-| *Rotas cruzadas e dispersas* | *Regiões definidas e rotas locais* |
-
-
-
-*Nota: As imagens acima são exemplos gerados pelas ferramentas de plotagem integradas no código.*
-
-
 # Modelo Heuristico - Alocacao de Promotores de Vendas
 
 Sistema de otimizacao para alocacao de promotores de vendas em lojas, combinando programacao linear inteira mista com metaheuristicas.
