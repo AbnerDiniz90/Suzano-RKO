@@ -29,7 +29,7 @@ A empresa possui um conjunto de lojas distribuídas geograficamente que precisam
 
 
 
-## 🚀 Abordagens e Arquivos
+# RKO - Random Key Optimizer
 
 
 
